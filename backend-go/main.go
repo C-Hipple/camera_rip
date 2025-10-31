@@ -46,6 +46,14 @@ func main() {
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
+	// Serve frontend
+	_, callerFile, _, ok := runtime.Caller(0)
+	if !ok {
+		log.Fatal("Failed to get caller file information")
+	}
+	frontendBuildDir := filepath.Join(filepath.Dir(callerFile), "..", "frontend", "build")
+	http.Handle("/", http.FileServer(http.Dir(frontendBuildDir)))
+
 	log.Println("Starting server on :5001")
 	if err := http.ListenAndServe(":5001", nil); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
