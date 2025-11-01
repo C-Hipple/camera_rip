@@ -1,0 +1,20 @@
+# Frontend build artifacts
+frontend/build/
+backend-go/frontend/
+
+# Go binary
+backend-go/camera-rip
+
+# Node modules
+frontend/node_modules/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OS files
+.DS_Store
+

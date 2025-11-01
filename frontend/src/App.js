@@ -159,7 +159,7 @@ function App() {
     return (
         <div className="App">
             <ToastContainer position="bottom-center" autoClose={5000} hideProgressBar={false} newestOnTop={false} closeOnClick rtl={false} pauseOnFocusLoss draggable pauseOnHover theme="dark" />
-            
+
             <div className="bottom-left-controls">
                 <div className="sidebar-controls">
                     <button onClick={handleImport} disabled={isImporting} className="import-button">
@@ -191,7 +191,7 @@ function App() {
                     )}
                 </div>
             </div>
-            
+
 
 
             <main className="App-main">
@@ -277,6 +277,7 @@ function App() {
 function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, selectedPhotos }) {
     const getCarouselPhotos = () => {
         const numPhotos = photos.length;
+        console.log("length: ", photos.length);
         if (numPhotos === 0) return [];
 
         const indexes = [];
@@ -298,6 +299,7 @@ function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, sel
     return (
         <div className="carousel-container">
             {carouselIndexes.map((photoIndex, i) => {
+                console.log(photoIndex)
                 const photoName = photos[photoIndex];
                 const isSelected = selectedPhotos.has(photoName);
                 return (

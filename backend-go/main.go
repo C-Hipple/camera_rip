@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+		"fmt"
 	"encoding/json"
 	"image"
 	"image/jpeg"
@@ -11,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
