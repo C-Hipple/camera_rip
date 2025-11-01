@@ -1,57 +1,166 @@
-# Photo Selector App
+# Camera Photo Import & Selector
 
-This project is a simple web application for sorting through photos in a local directory. It consists of a Python/Flask backend to handle file system operations and a React frontend to provide the user interface.
+A web-based application for importing photos from your camera's SD card, reviewing them, selecting the best shots, and exporting both JPEGs and raw CR3 files. Built with a Go backend and React frontend.
+
+## Features
+
+- **Import from SD Card**: Automatically detects and imports JPEG photos from Canon cameras (DCIM/100CANON)
+- **Photo Review**: Navigate through imported photos with keyboard shortcuts
+- **Smart Selection**: Mark photos for export with visual feedback
+- **Pin & Compare**: Pin one photo to compare side-by-side with others
+- **Batch Export**: Copy selected JPEGs to an export folder
+- **Raw File Export**: Copy corresponding CR3 raw files directly from SD card for selected photos
+- **Export Status Tracking**: Track how many raw files have been exported vs. how many are missing
 
 ## Prerequisites
 
 Before you begin, ensure you have the following installed:
-- Go 1.22 (but honestly any version should really work)
-- Node.js and npm
+- **Go 1.22+** (older versions should work too)
+- **Node.js and npm** (for building the frontend)
 
-## How to Run
+## Installation & Setup
 
-You will need to run two separate processes in two different terminals for the application to work.
+### 1. Clone the Repository
 
-### 1. Run the Backend Server
+```bash
+git clone <repository-url>
+cd camera_rip
+```
 
-The backend is a go server (base library, no packages) responsible for finding photo directories, serving image files, and copying selected photos.
+### 2. Install Dependencies
 
-3.  Start the server:
-    ```bash
-    go run main.go
-    ```
+```bash
+make install
+```
 
-Leave this terminal running. The backend server will be active on `http://localhost:5001`.
+This will install both frontend (npm) and backend (Go) dependencies.
 
-### 2. Run the Frontend Application
+### 3. Build and Run
 
-The frontend is a React application that provides the user interface in your browser.
+```bash
+make build-and-run
+```
 
-1.  In a **new terminal**, navigate to the frontend directory:
-    ```bash
-    cd /home/chris/gists/camera_rip/frontend
-    ```
+This will build the frontend, copy it to the backend, compile the Go binary, and start the server.
 
-2.  Install the required Node.js packages:
-    ```bash
-    npm install
-    ```
+Alternatively, you can build and run separately:
 
-3.  Start the React development server:
-    ```bash
-    npm start
-    ```
+```bash
+make build    # Build everything
+make run      # Run the application
+```
 
-This will automatically open a new tab in your web browser pointing to `http://localhost:3000`.
+The application will be available at `http://localhost:5001`
 
+### Quick Development Run
 
+For quick testing without building a binary, you can also run:
 
-## How to Use
+```bash
+make frontend  # Build frontend only
+cd backend-go && go run main.go
+```
 
-1.  The application will automatically look for photo directories inside your `~/photos` folder.
-2.  Select a directory from the dropdown menu at the top.
-3.  Use the **Next (→)** and **Previous (←)** buttons or the arrow keys to navigate through the photos.
-4.  Press the **`s`** key to mark the current photo as "selected".
-5.  Press the **`x`** key to unselect it.
-6.  When you are finished, click the **Save selected photos** button.
-7.  The selected photos will be copied into a new sub-directory named `selected` inside the directory you were viewing (e.g., `~/photos/2025-09-27/selected`).
+### How It Works
+
+The frontend is embedded directly into the Go binary using Go's `embed` package. When you run `make build`, the React app is compiled to static files (HTML, CSS, JS), then the `//go:embed` directive in `main.go` reads these files at compile time and includes them as bytes inside the compiled binary. This creates a single, self-contained executable that serves the full web application from memory - no external files needed!
+
+## Workflow
+
+### 1. Import JPEGs from SD Card
+
+1. Connect your camera's SD card to your computer
+2. Click the **Import** button in the bottom-left corner
+3. Optionally, set a "Since" date to only import photos after a certain date
+4. JPEGs will be copied to `~/Pictures/photos/[timestamp]/`
+
+### 2. Review and Select Photos
+
+1. Use the directory dropdown to select an import session
+2. Navigate through photos using:
+   - **Arrow keys** (← →) or **j/k** keys
+   - Thumbnail carousel (click to jump to a photo)
+3. Select photos you want to keep:
+   - Press **`s`** to select the current photo
+   - Press **`x`** to unselect
+4. Use the **pin feature** to compare photos:
+   - Press **`h`** to pin the current photo
+   - Navigate to other photos to compare side-by-side
+   - Press **`h`** again or **`Esc`** to unpin
+5. Click **Save selected photos** when done
+6. Selected JPEGs are copied to `~/Pictures/photos/[timestamp]/selected/`
+
+### 3. Export Raw Files
+
+1. After saving selected photos, the **Export Raw Files** button becomes enabled
+2. Keep your SD card connected
+3. Click **Export Raw Files** to copy CR3 raw files from the SD card
+4. Raw files are copied to `~/Pictures/photos/[timestamp]/selected/raw/`
+5. The button shows how many raw files are missing
+6. Export status is displayed below the controls
+
+## Keyboard Shortcuts
+
+- **`←` or `j`**: Previous photo
+- **`→` or `k`**: Next photo
+- **`s`**: Select current photo
+- **`x`**: Unselect current photo
+- **`h`**: Pin/unpin current photo for comparison
+- **`Esc`**: Clear pinned photo
+
+## Directory Structure
+
+```
+~/Pictures/photos/
+└── 2025-11-01_14-30-45/          # Import session
+    ├── IMG_0001.JPG              # Imported JPEGs
+    ├── IMG_0002.JPG
+    ├── IMG_0003.JPG
+    └── selected/                 # Selected photos
+        ├── IMG_0001.JPG          # Selected JPEGs
+        ├── IMG_0003.JPG
+        └── raw/                  # Raw files
+            ├── IMG_0001.CR3      # Corresponding raw files
+            └── IMG_0003.CR3
+```
+
+## Development
+
+To run the frontend in development mode:
+
+```bash
+cd frontend
+npm start
+```
+
+This will start the React development server on `http://localhost:3000` with hot-reloading.
+
+## Makefile Commands
+
+The project includes a Makefile with convenient commands:
+
+- **`make install`**: Install frontend and backend dependencies
+- **`make build`**: Build frontend and compile Go binary
+- **`make run`**: Run the compiled binary
+- **`make build-and-run`**: Build everything and start the server
+- **`make frontend`**: Build only the frontend
+- **`make clean`**: Remove all build artifacts
+
+## Continuous Integration
+
+The project includes GitHub Actions CI that automatically:
+- Checks Go code formatting (`gofmt`) and runs `go vet`
+- Builds the Go backend
+- Lints and builds the React frontend
+- Runs frontend tests
+- Creates a full production build and uploads the binary as an artifact
+
+The CI runs on every push to `main`/`master` branches and on all pull requests.
+
+## Camera Compatibility
+
+Currently configured for Canon cameras that store photos in `DCIM/100CANON`. The app looks for:
+- **JPEGs**: `.jpg` and `.jpeg` files
+- **Raw files**: `.CR3` files (Canon raw format)
+
+To support other camera brands/models, modify the `findUSBMountPoint()` function in `backend-go/main.go` to look for your camera's directory structure.

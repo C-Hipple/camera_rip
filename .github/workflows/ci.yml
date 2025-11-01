@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  backend:
+    name: Backend (Go)
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Download Go dependencies
+      working-directory: ./backend-go
+      run: go mod download
+
+    - name: Check Go formatting
+      working-directory: ./backend-go
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "Go files are not formatted. Run 'gofmt -s -w .'"
+          gofmt -s -l .
+          exit 1
+        fi
+
+    - name: Run go vet
+      working-directory: ./backend-go
+      run: go vet ./...
+
+    - name: Build Go binary
+      working-directory: ./backend-go
+      run: go build -v ./...
+
+  frontend:
+    name: Frontend (React)
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install frontend dependencies
+      working-directory: ./frontend
+      run: npm ci
+
+    - name: Run frontend linter
+      working-directory: ./frontend
+      run: npm run lint --if-present || echo "No lint script configured"
+
+    - name: Build frontend
+      working-directory: ./frontend
+      run: npm run build
+
+    - name: Run frontend tests
+      working-directory: ./frontend
+      run: npm test -- --passWithNoTests --watchAll=false
+
+  build-full:
+    name: Build Full Application
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Build with Makefile
+      run: |
+        make install
+        make build
+
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: camera-rip-linux-amd64
+        path: backend-go/camera-rip
+        retention-days: 7
+
