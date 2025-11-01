@@ -20,6 +20,12 @@ jobs:
       with:
         go-version: '1.22'
 
+    - name: Create minimal frontend build directory for embed
+      working-directory: ./backend-go
+      run: |
+        mkdir -p frontend/build
+        echo '<!DOCTYPE html><html><body>Placeholder</body></html>' > frontend/build/index.html
+
     - name: Download Go dependencies
       working-directory: ./backend-go
       run: go mod download
