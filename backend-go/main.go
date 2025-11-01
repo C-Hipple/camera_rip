@@ -2,7 +2,6 @@ package main
 
 import (
 	"embed"
-		"fmt"
 	"encoding/json"
 	"image"
 	"image/jpeg"
@@ -61,6 +60,8 @@ func main() {
 	http.HandleFunc("/api/photos", corsHandler(getPhotosHandler))
 	http.HandleFunc("/api/save", corsHandler(saveSelectedPhotosHandler))
 	http.HandleFunc("/api/import", corsHandler(importFromUSBHandler))
+	http.HandleFunc("/api/export-raw", corsHandler(exportRawFilesHandler))
+	http.HandleFunc("/api/export-status", corsHandler(exportStatusHandler))
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
@@ -291,6 +292,182 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":       "Successfully copied " + string(copiedCount) + " new files.",
 		"new_directory": filepath.Base(destinationDir),
+	})
+}
+
+func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
+	var data struct {
+		Directory string `json:"directory"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if data.Directory == "" {
+		http.Error(w, "Missing 'directory' in request", http.StatusBadRequest)
+		return
+	}
+
+	// Find USB/SD card mount point
+	usbMountPoint := findUSBMountPoint()
+	if usbMountPoint == "" {
+		http.Error(w, "USB device with 'DCIM/100CANON' directory not found. Is the SD card connected?", http.StatusNotFound)
+		return
+	}
+
+	sdCardDir := filepath.Join(usbMountPoint, "DCIM", "100CANON")
+	sourceDir := filepath.Join(photoBaseDir, data.Directory)
+	selectedDir := filepath.Join(sourceDir, "selected")
+	rawDestDir := filepath.Join(selectedDir, "raw")
+
+	// Check if selected directory exists and has files
+	selectedFiles, err := ioutil.ReadDir(selectedDir)
+	if err != nil {
+		http.Error(w, "Selected directory not found or empty", http.StatusNotFound)
+		return
+	}
+
+	// Filter for JPEG files in selected directory
+	var jpegFiles []string
+	for _, file := range selectedFiles {
+		if !file.IsDir() {
+			lowerName := strings.ToLower(file.Name())
+			if strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") {
+				jpegFiles = append(jpegFiles, file.Name())
+			}
+		}
+	}
+
+	if len(jpegFiles) == 0 {
+		http.Error(w, "No JPEG files found in selected directory", http.StatusNotFound)
+		return
+	}
+
+	// Create raw destination directory
+	if err := os.MkdirAll(rawDestDir, 0755); err != nil {
+		http.Error(w, "Failed to create raw destination directory", http.StatusInternalServerError)
+		return
+	}
+
+	copiedCount := 0
+	skippedCount := 0
+	notFoundCount := 0
+
+	for _, jpegFile := range jpegFiles {
+		// Get the base filename without extension
+		ext := filepath.Ext(jpegFile)
+		baseName := strings.TrimSuffix(jpegFile, ext)
+		rawFileName := baseName + ".CR3"
+
+		// Look for raw file on SD card
+		rawSourcePath := filepath.Join(sdCardDir, rawFileName)
+		rawDestPath := filepath.Join(rawDestDir, rawFileName)
+
+		// Check if raw file already exists at destination
+		if _, err := os.Stat(rawDestPath); err == nil {
+			skippedCount++
+			continue
+		}
+
+		// Check if raw file exists on SD card
+		if _, err := os.Stat(rawSourcePath); os.IsNotExist(err) {
+			log.Printf("Raw file not found on SD card: %s", rawSourcePath)
+			notFoundCount++
+			continue
+		}
+
+		// Copy the raw file from SD card
+		source, err := os.Open(rawSourcePath)
+		if err != nil {
+			log.Printf("Failed to open source raw file: %v", err)
+			notFoundCount++
+			continue
+		}
+		defer source.Close()
+
+		destination, err := os.Create(rawDestPath)
+		if err != nil {
+			log.Printf("Failed to create destination raw file: %v", err)
+			continue
+		}
+		defer destination.Close()
+
+		if _, err := io.Copy(destination, source); err != nil {
+			log.Printf("Failed to copy raw file: %v", err)
+			continue
+		}
+		copiedCount++
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":        "Raw file export complete",
+		"copied":         copiedCount,
+		"skipped":        skippedCount,
+		"not_found":      notFoundCount,
+		"total_selected": len(jpegFiles),
+	})
+}
+
+func exportStatusHandler(w http.ResponseWriter, r *http.Request) {
+	directory := r.URL.Query().Get("directory")
+	if directory == "" {
+		http.Error(w, "Missing 'directory' query parameter", http.StatusBadRequest)
+		return
+	}
+
+	sourceDir := filepath.Join(photoBaseDir, directory)
+	selectedDir := filepath.Join(sourceDir, "selected")
+	rawDir := filepath.Join(selectedDir, "raw")
+
+	// Count JPEG files in selected directory
+	selectedCount := 0
+	var jpegFiles []string
+	if files, err := ioutil.ReadDir(selectedDir); err == nil {
+		for _, file := range files {
+			if !file.IsDir() {
+				lowerName := strings.ToLower(file.Name())
+				if strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") {
+					selectedCount++
+					jpegFiles = append(jpegFiles, file.Name())
+				}
+			}
+		}
+	}
+
+	// Count CR3 files in raw directory
+	rawCount := 0
+	rawFileMap := make(map[string]bool)
+	if files, err := ioutil.ReadDir(rawDir); err == nil {
+		for _, file := range files {
+			if !file.IsDir() {
+				lowerName := strings.ToLower(file.Name())
+				if strings.HasSuffix(lowerName, ".cr3") {
+					rawCount++
+					rawFileMap[file.Name()] = true
+				}
+			}
+		}
+	}
+
+	// Calculate missing raw files
+	missingCount := 0
+	for _, jpegFile := range jpegFiles {
+		ext := filepath.Ext(jpegFile)
+		baseName := strings.TrimSuffix(jpegFile, ext)
+		rawFileName := baseName + ".CR3"
+		if !rawFileMap[rawFileName] {
+			missingCount++
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"selected_count": selectedCount,
+		"raw_count":      rawCount,
+		"missing_count":  missingCount,
 	})
 }
 

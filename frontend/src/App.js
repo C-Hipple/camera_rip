@@ -15,6 +15,8 @@ function App() {
     const [isImporting, setIsImporting] = useState(false);
     const [sinceDate, setSinceDate] = useState('');
     const [pinnedPhoto, setPinnedPhoto] = useState(null);
+    const [exportStatus, setExportStatus] = useState({ selected_count: 0, raw_count: 0, missing_count: 0 });
+    const [isExportingRaw, setIsExportingRaw] = useState(false);
 
     const fetchDirectories = useCallback(() => {
         fetch(`${API_URL}/api/directories`)
@@ -28,6 +30,21 @@ function App() {
                 }
             })
             .catch(err => toast.error("Error fetching directories."));
+    }, [currentDirectory]);
+
+    const fetchExportStatus = useCallback(() => {
+        if (!currentDirectory) return;
+        fetch(`${API_URL}/api/export-status?directory=${currentDirectory}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data && !data.error) {
+                    setExportStatus(data);
+                }
+            })
+            .catch(err => {
+                // Silently fail - directory might not have a selected folder yet
+                setExportStatus({ selected_count: 0, raw_count: 0, missing_count: 0 });
+            });
     }, [currentDirectory]);
 
     useEffect(() => {
@@ -77,7 +94,8 @@ function App() {
                 }
             })
             .catch(err => toast.error("Error fetching photos."));
-    }, [currentDirectory]);
+        fetchExportStatus();
+    }, [currentDirectory, fetchExportStatus]);
 
     const handleSelection = useCallback((photoName, select) => {
         setSelectedPhotos(prevSelected => {
@@ -109,6 +127,7 @@ function App() {
                 toast.update(toastId, { render: data.error, type: "error", isLoading: false, autoClose: 5000 });
             } else {
                 toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
+                fetchExportStatus(); // Update export status after save
             }
         })
         .catch(err => {
@@ -116,11 +135,36 @@ function App() {
         });
     };
 
-    const navigate = (direction) => {
+    const handleExportRaw = async () => {
+        setIsExportingRaw(true);
+        const toastId = toast.loading("Exporting raw files...");
+        try {
+            const response = await fetch(`${API_URL}/api/export-raw`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ directory: currentDirectory })
+            });
+            const data = await response.json();
+            if (response.ok) {
+                const message = `Exported ${data.copied} raw files (${data.skipped} already existed, ${data.not_found} not found)`;
+                toast.update(toastId, { render: message, type: "success", isLoading: false, autoClose: 5000 });
+                fetchExportStatus(); // Update export status after export
+            } else {
+                toast.update(toastId, { render: data.error || 'An unknown error occurred.', type: "error", isLoading: false, autoClose: 5000 });
+            }
+        } catch (err) {
+            toast.update(toastId, { render: "Failed to export raw files.", type: "error", isLoading: false, autoClose: 5000 });
+        }
+        setIsExportingRaw(false);
+    };
+
+    const navigate = useCallback((direction) => {
         if (photos.length === 0) return;
         const newIndex = (currentIndex + direction + photos.length) % photos.length;
         setCurrentIndex(newIndex);
-    };
+    }, [currentIndex, photos.length]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -265,9 +309,20 @@ function App() {
                     <button onClick={handleSave} disabled={selectedPhotos.size === 0} className="save-button">
                         Save {selectedPhotos.size} selected photos
                     </button>
+                    <button 
+                        onClick={handleExportRaw} 
+                        disabled={exportStatus.selected_count === 0 || isExportingRaw} 
+                        className="export-raw-button">
+                        {isExportingRaw ? 'Exporting...' : `Export Raw Files (${exportStatus.missing_count} missing)`}
+                    </button>
                 </div>
                 <div className="instructions">
                     <p>Use 's' to select, 'x' to unselect, and 'h' to pin/unpin. Press 'Escape' to clear pinned photo.</p>
+                    {exportStatus.selected_count > 0 && (
+                        <p className="export-status">
+                            Export Status: {exportStatus.selected_count} selected JPEGs, {exportStatus.raw_count} raw files exported, {exportStatus.missing_count} missing
+                        </p>
+                    )}
                 </div>
             </main>
         </div>

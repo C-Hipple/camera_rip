@@ -145,11 +145,29 @@
   font-weight: bold;
 }
 
+.export-raw-button {
+  background-color: #d65d0e; /* Gruvbox Orange */
+  color: #ebdbb2;
+  font-weight: bold;
+}
+
+.export-raw-button:disabled {
+  background-color: #7c6f64; /* Gruvbox Dark Gray */
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 
 .instructions {
   margin-top: 20px;
   font-style: italic;
   color: #a89984; /* Gruvbox Gray */
+}
+
+.export-status {
+  margin-top: 10px;
+  font-style: normal;
+  color: #d79921; /* Gruvbox Yellow */
+  font-weight: bold;
 }
 
 /* --- Carousel --- */
