@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -193,7 +194,7 @@ func saveSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Successfully copied " + string(len(data.SelectedFiles)) + " files to '" + destinationDir + "'",
+		"message": "Successfully copied " + strconv.Itoa(len(data.SelectedFiles)) + " files to '" + destinationDir + "'",
 	})
 }
 
@@ -290,7 +291,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":       "Successfully copied " + string(copiedCount) + " new files.",
+		"message":       "Successfully copied " + strconv.Itoa(copiedCount) + " new files.",
 		"new_directory": filepath.Base(destinationDir),
 	})
 }
