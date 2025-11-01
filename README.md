@@ -12,6 +12,10 @@ A web-based application for importing photos from your camera's SD card, reviewi
 - **Raw File Export**: Copy corresponding CR3 raw files directly from SD card for selected photos
 - **Export Status Tracking**: Track how many raw files have been exported vs. how many are missing
 
+## Screenshot
+
+![Camera Rip Screenshot](doc/screenshot.png)
+
 ## Prerequisites
 
 Before you begin, ensure you have the following installed:
