@@ -1,14 +1,17 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"image"
 	"image/jpeg"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -18,11 +21,26 @@ import (
 	"github.com/nfnt/resize"
 )
 
+//go:embed all:frontend/build
+var frontend embed.FS
+
 var (
 	photoBaseDir      string
 	thumbnailCacheDir string
 	thumbnailSize     = 200
 )
+
+type spaFileSystem struct {
+	root http.FileSystem
+}
+
+func (fs *spaFileSystem) Open(name string) (http.File, error) {
+	f, err := fs.root.Open(name)
+	if os.IsNotExist(err) {
+		return fs.root.Open("index.html")
+	}
+	return f, err
+}
 
 func main() {
 	userHomeDir, err := os.UserHomeDir()
@@ -46,6 +64,13 @@ func main() {
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
+	// Serve the frontend
+	fs, err := fs.Sub(frontend, "frontend/build")
+	if err != nil {
+		log.Fatalf("Failed to create sub file system: %v", err)
+	}
+	http.Handle("/", http.FileServer(&spaFileSystem{http.FS(fs)}))
+
 	log.Println("Starting server on :5001")
 	if err := http.ListenAndServe(":5001", nil); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
@@ -55,7 +80,7 @@ func main() {
 func corsHandler(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)

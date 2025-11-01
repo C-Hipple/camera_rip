@@ -1,4 +1,3 @@
-
 # Photo Selector App
 
 This project is a simple web application for sorting through photos in a local directory. It consists of a Python/Flask backend to handle file system operations and a React frontend to provide the user interface.
@@ -6,8 +5,7 @@ This project is a simple web application for sorting through photos in a local d
 ## Prerequisites
 
 Before you begin, ensure you have the following installed:
-- Python 3.x
-- pip (Python package installer)
+- Go 1.22 (but honestly any version should really work)
 - Node.js and npm
 
 ## How to Run
@@ -16,21 +14,11 @@ You will need to run two separate processes in two different terminals for the a
 
 ### 1. Run the Backend Server
 
-The backend is a Python Flask server responsible for finding photo directories, serving image files, and copying selected photos.
-
-1.  Navigate to the backend directory:
-    ```bash
-    cd /home/chris/gists/camera_rip/backend
-    ```
-
-2.  Install the required Python packages:
-    ```bash
-    pip install -r requirements.txt
-    ```
+The backend is a go server (base library, no packages) responsible for finding photo directories, serving image files, and copying selected photos.
 
 3.  Start the server:
     ```bash
-    python server.py
+    go run main.go
     ```
 
 Leave this terminal running. The backend server will be active on `http://localhost:5001`.
