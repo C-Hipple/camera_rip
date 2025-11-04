@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
-function PhotoViewer({ photoName, directory, isSelected, children }) {
+function PhotoViewer({ photoName, directory, isSelected, isSaved, children }) {
     const [zoom, setZoom] = useState(1);
     const [position, setPosition] = useState({ x: 0, y: 0 });
     const [isPanning, setIsPanning] = useState(false);
@@ -56,7 +56,7 @@ function PhotoViewer({ photoName, directory, isSelected, children }) {
             <img
                 src={`${API_URL}/photos/${directory}/${photoName}`}
                 alt={photoName}
-                className={`photo-display ${isSelected ? 'selected' : ''}`}
+                className={`photo-display ${isSaved ? 'saved' : (isSelected ? 'selected' : '')}`}
                 style={{
                     transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})`,
                     cursor: isPanning ? 'grabbing' : (zoom > 1 ? 'grab' : 'default')

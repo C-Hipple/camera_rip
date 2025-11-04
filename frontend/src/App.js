@@ -12,6 +12,7 @@ function App() {
     const [photos, setPhotos] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [selectedPhotos, setSelectedPhotos] = useState(new Set());
+    const [savedPhotos, setSavedPhotos] = useState(new Set());
     const [isImporting, setIsImporting] = useState(false);
     const [sinceDate, setSinceDate] = useState('');
     const [pinnedPhoto, setPinnedPhoto] = useState(null);
@@ -90,14 +91,33 @@ function App() {
                 } else {
                     setPhotos(data);
                     setCurrentIndex(0);
-                    setSelectedPhotos(new Set());
                 }
             })
             .catch(err => toast.error("Error fetching photos."));
+        
+        fetch(`${API_URL}/api/selected-photos?directory=${currentDirectory}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    toast.error(data.error);
+                    setSavedPhotos(new Set());
+                } else {
+                    setSavedPhotos(new Set(data));
+                }
+                setSelectedPhotos(new Set()); // Clear selection on directory change
+            })
+            .catch(err => {
+                setSavedPhotos(new Set()); // Default to empty set on error
+                setSelectedPhotos(new Set());
+            });
+
         fetchExportStatus();
     }, [currentDirectory, fetchExportStatus]);
 
     const handleSelection = useCallback((photoName, select) => {
+        if (savedPhotos.has(photoName)) {
+            return; // Cannot change selection for saved photos
+        }
         setSelectedPhotos(prevSelected => {
             const newSelected = new Set(prevSelected);
             if (select) {
@@ -107,10 +127,12 @@ function App() {
             }
             return newSelected;
         });
-    }, []);
+    }, [savedPhotos]);
 
     const handleSave = () => {
         const toastId = toast.loading("Saving...")
+        const allFilesToSave = Array.from(new Set([...selectedPhotos, ...savedPhotos]));
+
         fetch(`${API_URL}/api/save`, {
             method: 'POST',
             headers: {
@@ -118,7 +140,7 @@ function App() {
             },
             body: JSON.stringify({
                 directory: currentDirectory,
-                selected_files: Array.from(selectedPhotos),
+                selected_files: allFilesToSave,
             }),
         })
         .then(res => res.json())
@@ -127,6 +149,9 @@ function App() {
                 toast.update(toastId, { render: data.error, type: "error", isLoading: false, autoClose: 5000 });
             } else {
                 toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
+                // Move selected to saved and clear selected
+                setSavedPhotos(new Set(allFilesToSave));
+                setSelectedPhotos(new Set());
                 fetchExportStatus(); // Update export status after save
             }
         })
@@ -198,7 +223,9 @@ function App() {
 
     const currentPhotoName = photos[currentIndex];
     const isSelected = selectedPhotos.has(currentPhotoName);
+    const isSaved = savedPhotos.has(currentPhotoName);
     const isPinnedSelected = selectedPhotos.has(pinnedPhoto);
+    const isPinnedSaved = savedPhotos.has(pinnedPhoto);
 
     return (
         <div className="App">
@@ -244,42 +271,44 @@ function App() {
                         <div className="main-photo-area">
                             {pinnedPhoto ? (
                                 <div className="comparison-container">
-                                    <PhotoViewer
-                                        photoName={pinnedPhoto}
-                                        directory={currentDirectory}
-                                        isSelected={isPinnedSelected}
-                                    >
-                                        <p>{pinnedPhoto}</p>
-                                        <p className={`status ${isPinnedSelected ? 'status-selected' : ''}`}>
-                                            {isPinnedSelected ? 'SELECTED' : 'Not Selected'}
-                                        </p>
-                                        <p className="status status-pinned">PINNED</p>
-                                    </PhotoViewer>
-                                    <PhotoViewer
-                                        photoName={currentPhotoName}
-                                        directory={currentDirectory}
-                                        isSelected={isSelected}
-                                    >
-                                        <p>{currentIndex + 1} / {photos.length}</p>
-                                        <p>{currentPhotoName}</p>
-                                        <p className={`status ${isSelected ? 'status-selected' : ''}`}>
-                                            {isSelected ? 'SELECTED' : 'Not Selected'}
-                                        </p>
-                                    </PhotoViewer>
-                                </div>
-                            ) : (
-                                <PhotoViewer
-                                    photoName={currentPhotoName}
-                                    directory={currentDirectory}
-                                    isSelected={isSelected}
-                                >
-                                    <p>{currentIndex + 1} / {photos.length}</p>
-                                    <p>{currentPhotoName}</p>
-                                    <p className={`status ${isSelected ? 'status-selected' : ''}`}>
-                                        {isSelected ? 'SELECTED' : 'Not Selected'}
-                                    </p>
-                                </PhotoViewer>
-                            )}
+                                                                         <PhotoViewer
+                                                                            photoName={pinnedPhoto}
+                                                                            directory={currentDirectory}
+                                                                            isSelected={isPinnedSelected}
+                                                                            isSaved={isPinnedSaved}
+                                                                        >
+                                                                            <p>{pinnedPhoto}</p>
+                                                                            <p className={`status ${isPinnedSaved ? 'status-saved' : (isPinnedSelected ? 'status-selected' : '')}`}>
+                                                                                {isPinnedSaved ? 'SAVED' : (isPinnedSelected ? 'SELECTED' : 'Not Selected')}
+                                                                            </p>
+                                                                            <p className="status status-pinned">PINNED</p>
+                                                                        </PhotoViewer>
+                                                                        <PhotoViewer
+                                                                            photoName={currentPhotoName}
+                                                                            directory={currentDirectory}
+                                                                            isSelected={isSelected}
+                                                                            isSaved={isSaved}
+                                                                        >
+                                                                            <p>{currentIndex + 1} / {photos.length}</p>
+                                                                            <p>{currentPhotoName}</p>
+                                                                            <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : '')}`}>
+                                                                                {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : 'Not Selected')}
+                                                                            </p>
+                                                                        </PhotoViewer>
+                                                                    </div>
+                                                                ) : (
+                                                                    <PhotoViewer
+                                                                        photoName={currentPhotoName}
+                                                                        directory={currentDirectory}
+                                                                        isSelected={isSelected}
+                                                                        isSaved={isSaved}
+                                                                    >
+                                                                        <p>{currentIndex + 1} / {photos.length}</p>
+                                                                        <p>{currentPhotoName}</p>
+                                                                        <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : '')}`}>
+                                                                            {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : 'Not Selected')}
+                                                                        </p>
+                                                                    </PhotoViewer>                            )}
                         </div>
                         <Carousel
                             photos={photos}
@@ -287,6 +316,7 @@ function App() {
                             setCurrentIndex={setCurrentIndex}
                             currentDirectory={currentDirectory}
                             selectedPhotos={selectedPhotos}
+                            savedPhotos={savedPhotos}
                         />
                     </>
                 ) : (
@@ -301,13 +331,13 @@ function App() {
                     <button onClick={() => navigate(-1)} disabled={photos.length === 0}>Previous (← or j)</button>
                     <button
                         onClick={() => handleSelection(currentPhotoName, !isSelected)}
-                        disabled={photos.length === 0}
-                        className={`select-toggle-button ${isSelected ? 'selected' : ''}`}>
-                        {isSelected ? 'Unselect (x)' : 'Select (s)'}
+                        disabled={photos.length === 0 || isSaved}
+                        className={`select-toggle-button ${isSaved ? 'saved' : (isSelected ? 'selected' : '')}`}>
+                        {isSaved ? 'SAVED' : (isSelected ? 'Unselect (x)' : 'Select (s)')}
                     </button>
                     <button onClick={() => navigate(1)} disabled={photos.length === 0}>Next (→ or k)</button>
                     <button onClick={handleSave} disabled={selectedPhotos.size === 0} className="save-button">
-                        Save {selectedPhotos.size} selected photos
+                        Save {selectedPhotos.size} new selections
                     </button>
                     <button 
                         onClick={handleExportRaw} 
@@ -329,10 +359,9 @@ function App() {
     );
 }
 
-function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, selectedPhotos }) {
+function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, selectedPhotos, savedPhotos }) {
     const getCarouselPhotos = () => {
         const numPhotos = photos.length;
-        console.log("length: ", photos.length);
         if (numPhotos === 0) return [];
 
         const indexes = [];
@@ -354,13 +383,13 @@ function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, sel
     return (
         <div className="carousel-container">
             {carouselIndexes.map((photoIndex, i) => {
-                console.log(photoIndex)
                 const photoName = photos[photoIndex];
                 const isSelected = selectedPhotos.has(photoName);
+                const isSaved = savedPhotos.has(photoName);
                 return (
                     <div
                         key={i}
-                        className={`carousel-thumbnail ${photoIndex === currentIndex ? 'active' : ''} ${isSelected ? 'selected' : ''}`}
+                        className={`carousel-thumbnail ${photoIndex === currentIndex ? 'active' : ''} ${isSaved ? 'saved' : (isSelected ? 'selected' : '')}`}
                         onClick={() => setCurrentIndex(photoIndex)}
                     >
                         <img

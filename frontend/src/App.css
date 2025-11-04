@@ -233,3 +233,23 @@
   color: #fb4934; /* Gruvbox Red */
   font-weight: bold;
 }
+
+/* Added for saved status */
+.photo-display.saved {
+  border-color: #98971a; /* Gruvbox Green */
+}
+
+.status-saved {
+  color: #98971a; /* Gruvbox Green */
+}
+
+.select-toggle-button.saved {
+    background-color: #98971a; /* Gruvbox Green */
+    color: #282828;
+    border-color: #98971a;
+    font-weight: bold;
+}
+
+.carousel-thumbnail.saved {
+  border-color: #98971a; /* Gruvbox Green */
+}

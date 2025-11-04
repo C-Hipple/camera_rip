@@ -63,6 +63,7 @@ func main() {
 	http.HandleFunc("/api/import", corsHandler(importFromUSBHandler))
 	http.HandleFunc("/api/export-raw", corsHandler(exportRawFilesHandler))
 	http.HandleFunc("/api/export-status", corsHandler(exportStatusHandler))
+	http.HandleFunc("/api/selected-photos", corsHandler(getSelectedPhotosHandler))
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
@@ -123,6 +124,45 @@ func getPhotosHandler(w http.ResponseWriter, r *http.Request) {
 	files, err := ioutil.ReadDir(targetDir)
 	if err != nil {
 		http.Error(w, "Failed to read photo directory", http.StatusInternalServerError)
+		return
+	}
+
+	var photos []string
+	for _, file := range files {
+		if !file.IsDir() {
+			lowerName := strings.ToLower(file.Name())
+			if strings.HasSuffix(lowerName, ".png") || strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") || strings.HasSuffix(lowerName, ".gif") {
+				if !strings.HasPrefix(file.Name(), "._") {
+					photos = append(photos, file.Name())
+				}
+			}
+		}
+	}
+
+	sort.Strings(photos)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(photos)
+}
+
+func getSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
+	directory := r.URL.Query().Get("directory")
+	if directory == "" {
+		http.Error(w, "Missing 'directory' query parameter", http.StatusBadRequest)
+		return
+	}
+
+	selectedDir := filepath.Join(photoBaseDir, directory, "selected")
+	files, err := ioutil.ReadDir(selectedDir)
+	if err != nil {
+		// If the directory doesn't exist, it just means no photos have been selected yet.
+		// Return an empty list.
+		if os.IsNotExist(err) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]string{})
+			return
+		}
+		http.Error(w, "Failed to read selected photo directory", http.StatusInternalServerError)
 		return
 	}
 
