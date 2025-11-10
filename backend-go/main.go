@@ -247,9 +247,38 @@ func saveSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func buildImportedFilesSet() map[string]bool {
+	importedFiles := make(map[string]bool)
+
+	dirs, err := ioutil.ReadDir(photoBaseDir)
+	if err != nil {
+		return importedFiles
+	}
+
+	for _, dir := range dirs {
+		if dir.IsDir() && dir.Name() != ".thumbnails" {
+			dirPath := filepath.Join(photoBaseDir, dir.Name())
+			files, err := ioutil.ReadDir(dirPath)
+			if err != nil {
+				continue
+			}
+
+			for _, file := range files {
+				if !file.IsDir() {
+					importedFiles[file.Name()] = true
+				}
+			}
+		}
+	}
+
+	return importedFiles
+}
+
 func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	var data struct {
-		Since string `json:"since"`
+		Since           string `json:"since"`
+		SkipDuplicates  bool   `json:"skip_duplicates"`
+		TargetDirectory string `json:"target_directory"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil && err != io.EOF {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -273,12 +302,24 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sourceDir := filepath.Join(usbMountPoint, "DCIM", "100CANON")
-	destinationDir := filepath.Join(photoBaseDir, time.Now().Format("2006-01-02_15-04-05"))
-
-	if err := os.MkdirAll(destinationDir, 0755); err != nil {
-		http.Error(w, "Could not create destination directory", http.StatusInternalServerError)
-		return
+	
+	// Determine destination directory: use target if specified, otherwise create new timestamped directory
+	var destinationDir string
+	var isNewBatch bool
+	if data.TargetDirectory != "" {
+		destinationDir = filepath.Join(photoBaseDir, data.TargetDirectory)
+		isNewBatch = false
+		// Verify target directory exists
+		if _, err := os.Stat(destinationDir); os.IsNotExist(err) {
+			http.Error(w, "Target directory does not exist", http.StatusBadRequest)
+			return
+		}
+	} else {
+		destinationDir = filepath.Join(photoBaseDir, time.Now().Format("2006-01-02_15-04-05"))
+		isNewBatch = true
 	}
+	
+	destinationDirCreated := !isNewBatch // If adding to existing, directory already exists
 
 	files, err := ioutil.ReadDir(sourceDir)
 	if err != nil {
@@ -286,7 +327,15 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build set of already imported files once (if skip duplicates is enabled)
+	var importedFiles map[string]bool
+	if data.SkipDuplicates {
+		importedFiles = buildImportedFilesSet()
+		log.Printf("Skip duplicates enabled: found %d already imported files", len(importedFiles))
+	}
+
 	copiedCount := 0
+	skippedDuplicates := 0
 	var copiedFiles []string
 	for _, file := range files {
 		if !file.IsDir() && strings.HasSuffix(strings.ToLower(file.Name()), ".jpg") && !strings.HasPrefix(file.Name(), "._") {
@@ -303,9 +352,25 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			// Check if file has already been imported to any directory (O(1) lookup)
+			if data.SkipDuplicates && importedFiles[file.Name()] {
+				skippedDuplicates++
+				continue
+			}
+
+			// Create destination directory on first file to be copied
+			if !destinationDirCreated {
+				if err := os.MkdirAll(destinationDir, 0755); err != nil {
+					log.Printf("Failed to create destination directory: %v", err)
+					http.Error(w, "Could not create destination directory", http.StatusInternalServerError)
+					return
+				}
+				destinationDirCreated = true
+			}
+
 			destinationFile := filepath.Join(destinationDir, file.Name())
 			if _, err := os.Stat(destinationFile); err == nil {
-				continue // Skip if file already exists
+				continue // Skip if file already exists in current destination
 			}
 
 			source, err := os.Open(sourceFile)
@@ -331,28 +396,51 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if copiedCount == 0 && !sinceDate.IsZero() {
+	// Handle case where no files were copied
+	if copiedCount == 0 {
+		var message string
+		if !sinceDate.IsZero() {
+			message = "No new photos found since " + data.Since
+		} else if skippedDuplicates > 0 {
+			message = "All " + strconv.Itoa(skippedDuplicates) + " photos have already been imported."
+		} else {
+			message = "No photos found to import."
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message":       "No new photos found since " + data.Since,
+			"message":       message,
 			"new_directory": nil,
 		})
 		return
 	}
 
 	// Start async thumbnail generation for imported photos
-	if len(copiedFiles) > 0 {
-		dirName := filepath.Base(destinationDir)
-		go func() {
-			log.Printf("Starting background thumbnail generation for imported directory: %s (%d photos)", dirName, len(copiedFiles))
-			preGenerateThumbnails(dirName, copiedFiles)
-		}()
+	dirName := filepath.Base(destinationDir)
+	go func() {
+		log.Printf("Starting background thumbnail generation for imported directory: %s (%d photos)", dirName, len(copiedFiles))
+		preGenerateThumbnails(dirName, copiedFiles)
+	}()
+
+	message := "Successfully copied " + strconv.Itoa(copiedCount) + " new files"
+	if !isNewBatch {
+		message += " to " + dirName
+	}
+	message += "."
+	if skippedDuplicates > 0 {
+		message += " Skipped " + strconv.Itoa(skippedDuplicates) + " already imported."
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	var newDirectory interface{}
+	if isNewBatch {
+		newDirectory = dirName
+	} else {
+		newDirectory = nil
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":       "Successfully copied " + strconv.Itoa(copiedCount) + " new files.",
-		"new_directory": filepath.Base(destinationDir),
+		"message":       message,
+		"new_directory": newDirectory,
 	})
 }
 

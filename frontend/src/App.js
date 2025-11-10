@@ -15,6 +15,8 @@ function App() {
     const [savedPhotos, setSavedPhotos] = useState(new Set());
     const [isImporting, setIsImporting] = useState(false);
     const [sinceDate, setSinceDate] = useState('');
+    const [skipDuplicates, setSkipDuplicates] = useState(true);
+    const [addToCurrentBatch, setAddToCurrentBatch] = useState(false);
     const [pinnedPhoto, setPinnedPhoto] = useState(null);
     const [exportStatus, setExportStatus] = useState({ selected_count: 0, raw_count: 0, missing_count: 0 });
     const [isExportingRaw, setIsExportingRaw] = useState(false);
@@ -61,14 +63,21 @@ function App() {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ since: sinceDate })
+                body: JSON.stringify({ 
+                    since: sinceDate,
+                    skip_duplicates: skipDuplicates,
+                    target_directory: addToCurrentBatch ? currentDirectory : ''
+                })
             });
             const data = await response.json();
             if (response.ok) {
                 toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
-                if (data.new_directory) {
+                if (data.new_directory && !addToCurrentBatch) {
                     fetchDirectories();
                     setCurrentDirectory(data.new_directory);
+                } else if (addToCurrentBatch) {
+                    // Refresh the current directory's photos
+                    window.location.reload();
                 }
             } else {
                 toast.update(toastId, { render: data.error || 'An unknown error occurred.', type: "error", isLoading: false, autoClose: 5000 });
@@ -245,6 +254,27 @@ function App() {
                             onChange={e => setSinceDate(e.target.value)}
                             className="date-picker"
                         />
+                    </div>
+                    <div className="checkbox-container">
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={skipDuplicates}
+                                onChange={e => setSkipDuplicates(e.target.checked)}
+                            />
+                            <span>Skip already imported</span>
+                        </label>
+                    </div>
+                    <div className="checkbox-container">
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={addToCurrentBatch}
+                                onChange={e => setAddToCurrentBatch(e.target.checked)}
+                                disabled={!currentDirectory}
+                            />
+                            <span>Add to current batch</span>
+                        </label>
                     </div>
                 </div>
 
