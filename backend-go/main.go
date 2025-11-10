@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nfnt/resize"
@@ -140,6 +141,14 @@ func getPhotosHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sort.Strings(photos)
+
+	// Start async thumbnail generation for this directory
+	if len(photos) > 0 {
+		go func() {
+			log.Printf("Starting background thumbnail generation for directory: %s (%d photos)", directory, len(photos))
+			preGenerateThumbnails(directory, photos)
+		}()
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(photos)
@@ -278,6 +287,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	copiedCount := 0
+	var copiedFiles []string
 	for _, file := range files {
 		if !file.IsDir() && strings.HasSuffix(strings.ToLower(file.Name()), ".jpg") && !strings.HasPrefix(file.Name(), "._") {
 			sourceFile := filepath.Join(sourceDir, file.Name())
@@ -317,6 +327,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			copiedCount++
+			copiedFiles = append(copiedFiles, file.Name())
 		}
 	}
 
@@ -327,6 +338,15 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 			"new_directory": nil,
 		})
 		return
+	}
+
+	// Start async thumbnail generation for imported photos
+	if len(copiedFiles) > 0 {
+		dirName := filepath.Base(destinationDir)
+		go func() {
+			log.Printf("Starting background thumbnail generation for imported directory: %s (%d photos)", dirName, len(copiedFiles))
+			preGenerateThumbnails(dirName, copiedFiles)
+		}()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -548,6 +568,71 @@ func findUSBMountPoint() string {
 	return ""
 }
 
+func generateThumbnail(directory, filename string) error {
+	thumbnailDir := filepath.Join(thumbnailCacheDir, directory)
+	thumbnailPath := filepath.Join(thumbnailDir, filename)
+
+	// Check if thumbnail already exists
+	if _, err := os.Stat(thumbnailPath); err == nil {
+		return nil // Already exists
+	}
+
+	originalPhotoPath := filepath.Join(photoBaseDir, directory, filename)
+	file, err := os.Open(originalPhotoPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	img, _, err := image.Decode(file)
+	if err != nil {
+		return err
+	}
+
+	thumb := resize.Thumbnail(uint(thumbnailSize), uint(thumbnailSize), img, resize.Lanczos3)
+
+	if err := os.MkdirAll(thumbnailDir, 0755); err != nil {
+		return err
+	}
+
+	out, err := os.Create(thumbnailPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	return jpeg.Encode(out, thumb, nil)
+}
+
+func preGenerateThumbnails(directory string, photos []string) {
+	const numWorkers = 20
+	var wg sync.WaitGroup
+	photoChan := make(chan string, len(photos))
+
+	// Start worker goroutines
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for filename := range photoChan {
+				if err := generateThumbnail(directory, filename); err != nil {
+					log.Printf("Failed to generate thumbnail for %s: %v", filename, err)
+				}
+			}
+		}()
+	}
+
+	// Send photos to workers
+	for _, photo := range photos {
+		photoChan <- photo
+	}
+	close(photoChan)
+
+	// Wait for all workers to complete
+	wg.Wait()
+	log.Printf("Completed thumbnail generation for directory: %s (%d photos)", directory, len(photos))
+}
+
 func servePhotoHandler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/photos/"), "/")
 	if len(parts) < 2 {
@@ -572,44 +657,18 @@ func serveThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 	thumbnailDir := filepath.Join(thumbnailCacheDir, directory)
 	thumbnailPath := filepath.Join(thumbnailDir, filename)
 
+	// Check if thumbnail already exists
 	if _, err := os.Stat(thumbnailPath); err == nil {
 		http.ServeFile(w, r, thumbnailPath)
 		return
 	}
 
-	originalPhotoPath := filepath.Join(photoBaseDir, directory, filename)
-	if _, err := os.Stat(originalPhotoPath); os.IsNotExist(err) {
-		http.Error(w, "Original photo not found", http.StatusNotFound)
+	// Generate thumbnail on-demand if it doesn't exist
+	if err := generateThumbnail(directory, filename); err != nil {
+		http.Error(w, "Failed to generate thumbnail", http.StatusInternalServerError)
+		log.Printf("Error generating thumbnail for %s/%s: %v", directory, filename, err)
 		return
 	}
 
-	file, err := os.Open(originalPhotoPath)
-	if err != nil {
-		http.Error(w, "Failed to open original photo", http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	img, _, err := image.Decode(file)
-	if err != nil {
-		http.Error(w, "Failed to decode image", http.StatusInternalServerError)
-		return
-	}
-
-	thumb := resize.Thumbnail(uint(thumbnailSize), uint(thumbnailSize), img, resize.Lanczos3)
-
-	if err := os.MkdirAll(thumbnailDir, 0755); err != nil {
-		http.Error(w, "Failed to create thumbnail directory", http.StatusInternalServerError)
-		return
-	}
-
-	out, err := os.Create(thumbnailPath)
-	if err != nil {
-		http.Error(w, "Failed to create thumbnail file", http.StatusInternalServerError)
-		return
-	}
-	defer out.Close()
-
-	jpeg.Encode(out, thumb, nil)
 	http.ServeFile(w, r, thumbnailPath)
 }
