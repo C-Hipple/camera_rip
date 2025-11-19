@@ -65,6 +65,7 @@ func main() {
 	http.HandleFunc("/api/export-raw", corsHandler(exportRawFilesHandler))
 	http.HandleFunc("/api/export-status", corsHandler(exportStatusHandler))
 	http.HandleFunc("/api/selected-photos", corsHandler(getSelectedPhotosHandler))
+	http.HandleFunc("/api/delete-imported", corsHandler(deleteImportedHandler))
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
@@ -279,6 +280,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		Since           string `json:"since"`
 		SkipDuplicates  bool   `json:"skip_duplicates"`
 		TargetDirectory string `json:"target_directory"`
+		ImportVideos    bool   `json:"import_videos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil && err != io.EOF {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -338,7 +340,15 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	skippedDuplicates := 0
 	var copiedFiles []string
 	for _, file := range files {
-		if !file.IsDir() && strings.HasSuffix(strings.ToLower(file.Name()), ".jpg") && !strings.HasPrefix(file.Name(), "._") {
+		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
+			lowerName := strings.ToLower(file.Name())
+			// Process .jpg files always, and .mp4 files only if import_videos is enabled
+			isJpg := strings.HasSuffix(lowerName, ".jpg")
+			isMp4 := strings.HasSuffix(lowerName, ".mp4")
+			if !isJpg && (!isMp4 || !data.ImportVideos) {
+				continue
+			}
+
 			sourceFile := filepath.Join(sourceDir, file.Name())
 
 			if !sinceDate.IsZero() {
@@ -392,7 +402,10 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			copiedCount++
-			copiedFiles = append(copiedFiles, file.Name())
+			// Only add image files to copiedFiles for thumbnail generation
+			if isJpg {
+				copiedFiles = append(copiedFiles, file.Name())
+			}
 		}
 	}
 
@@ -400,11 +413,11 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	if copiedCount == 0 {
 		var message string
 		if !sinceDate.IsZero() {
-			message = "No new photos found since " + data.Since
+			message = "No new files found since " + data.Since
 		} else if skippedDuplicates > 0 {
-			message = "All " + strconv.Itoa(skippedDuplicates) + " photos have already been imported."
+			message = "All " + strconv.Itoa(skippedDuplicates) + " files have already been imported."
 		} else {
-			message = "No photos found to import."
+			message = "No files found to import."
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -617,6 +630,72 @@ func exportStatusHandler(w http.ResponseWriter, r *http.Request) {
 		"selected_count": selectedCount,
 		"raw_count":      rawCount,
 		"missing_count":  missingCount,
+	})
+}
+
+func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Find USB/SD card mount point
+	usbMountPoint := findUSBMountPoint()
+	if usbMountPoint == "" {
+		http.Error(w, "USB device with 'DCIM/100CANON' directory not found. Is it connected?", http.StatusNotFound)
+		return
+	}
+
+	sourceDir := filepath.Join(usbMountPoint, "DCIM", "100CANON")
+	files, err := ioutil.ReadDir(sourceDir)
+	if err != nil {
+		http.Error(w, "Failed to read source directory", http.StatusInternalServerError)
+		return
+	}
+
+	// Build set of imported files using the same logic as the import handler
+	importedFiles := buildImportedFilesSet()
+	log.Printf("Delete imported: found %d already imported files", len(importedFiles))
+
+	deletedCount := 0
+	notFoundCount := 0
+	errorCount := 0
+
+	for _, file := range files {
+		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
+			lowerName := strings.ToLower(file.Name())
+			// Process both .jpg and .mp4 files
+			isJpg := strings.HasSuffix(lowerName, ".jpg")
+			isMp4 := strings.HasSuffix(lowerName, ".mp4")
+			if !isJpg && !isMp4 {
+				continue
+			}
+
+			// Only delete files that are in the imported set
+			if importedFiles[file.Name()] {
+				filePath := filepath.Join(sourceDir, file.Name())
+				if err := os.Remove(filePath); err != nil {
+					if os.IsNotExist(err) {
+						notFoundCount++
+					} else {
+						log.Printf("Failed to delete file %s: %v", filePath, err)
+						errorCount++
+					}
+				} else {
+					deletedCount++
+					log.Printf("Deleted imported file: %s", file.Name())
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":      "Delete operation complete",
+		"deleted":      deletedCount,
+		"not_found":    notFoundCount,
+		"errors":       errorCount,
+		"total_found":  deletedCount + notFoundCount + errorCount,
 	})
 }
 

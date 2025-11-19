@@ -4,6 +4,7 @@ backend-go/frontend/
 
 # Go binary
 backend-go/camera-rip
+backend-go/backend
 
 # Node modules
 frontend/node_modules/
@@ -17,4 +18,3 @@ frontend/node_modules/
 
 # OS files
 .DS_Store
-

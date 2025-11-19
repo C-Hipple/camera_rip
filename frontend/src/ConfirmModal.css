@@ -1,0 +1,72 @@
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background-color: #3c3836; /* Gruvbox Dark Gray */
+    border: 2px solid #a89984; /* Gruvbox Gray */
+    border-radius: 10px;
+    padding: 30px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.modal-title {
+    color: #fb4934; /* Gruvbox Red */
+    margin: 0 0 15px 0;
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+.modal-message {
+    color: #ebdbb2; /* Gruvbox Light */
+    margin: 0 0 25px 0;
+    font-size: 1rem;
+    line-height: 1.5;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 15px;
+    justify-content: flex-end;
+}
+
+.modal-button {
+    padding: 10px 20px;
+    font-size: 1rem;
+    border-radius: 5px;
+    border: 1px solid #a89984;
+    cursor: pointer;
+    font-weight: bold;
+    transition: all 0.2s;
+}
+
+.modal-button-cancel {
+    background-color: #3c3836;
+    color: #ebdbb2;
+}
+
+.modal-button-cancel:hover {
+    background-color: #504945;
+}
+
+.modal-button-confirm {
+    background-color: #fb4934; /* Gruvbox Red */
+    color: #282828;
+    border-color: #fb4934;
+}
+
+.modal-button-confirm:hover {
+    background-color: #cc241d; /* Darker red */
+}
+

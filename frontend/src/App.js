@@ -3,6 +3,7 @@ import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import './App.css';
 import PhotoViewer from './PhotoViewer';
+import ConfirmModal from './ConfirmModal';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
@@ -17,9 +18,12 @@ function App() {
     const [sinceDate, setSinceDate] = useState('');
     const [skipDuplicates, setSkipDuplicates] = useState(true);
     const [addToCurrentBatch, setAddToCurrentBatch] = useState(false);
+    const [importVideos, setImportVideos] = useState(false);
     const [pinnedPhoto, setPinnedPhoto] = useState(null);
     const [exportStatus, setExportStatus] = useState({ selected_count: 0, raw_count: 0, missing_count: 0 });
     const [isExportingRaw, setIsExportingRaw] = useState(false);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const fetchDirectories = useCallback(() => {
         fetch(`${API_URL}/api/directories`)
@@ -66,7 +70,8 @@ function App() {
                 body: JSON.stringify({ 
                     since: sinceDate,
                     skip_duplicates: skipDuplicates,
-                    target_directory: addToCurrentBatch ? currentDirectory : ''
+                    target_directory: addToCurrentBatch ? currentDirectory : '',
+                    import_videos: importVideos
                 })
             });
             const data = await response.json();
@@ -194,6 +199,30 @@ function App() {
         setIsExportingRaw(false);
     };
 
+    const handleDeleteImported = async () => {
+        setIsDeleting(true);
+        setShowDeleteModal(false);
+        const toastId = toast.loading("Deleting imported images from USB...");
+        try {
+            const response = await fetch(`${API_URL}/api/delete-imported`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+            const data = await response.json();
+            if (response.ok) {
+                const message = `Deleted ${data.deleted} imported files from USB${data.errors > 0 ? ` (${data.errors} errors)` : ''}`;
+                toast.update(toastId, { render: message, type: "success", isLoading: false, autoClose: 5000 });
+            } else {
+                toast.update(toastId, { render: data.error || 'An unknown error occurred.', type: "error", isLoading: false, autoClose: 5000 });
+            }
+        } catch (err) {
+            toast.update(toastId, { render: "Failed to delete imported images.", type: "error", isLoading: false, autoClose: 5000 });
+        }
+        setIsDeleting(false);
+    };
+
     const navigate = useCallback((direction) => {
         if (photos.length === 0) return;
         const newIndex = (currentIndex + direction + photos.length) % photos.length;
@@ -239,11 +268,28 @@ function App() {
     return (
         <div className="App">
             <ToastContainer position="bottom-center" autoClose={5000} hideProgressBar={false} newestOnTop={false} closeOnClick rtl={false} pauseOnFocusLoss draggable pauseOnHover theme="dark" />
+            <ConfirmModal
+                isOpen={showDeleteModal}
+                onClose={() => setShowDeleteModal(false)}
+                onConfirm={handleDeleteImported}
+                title="Delete Imported Images"
+                message="This will permanently delete all imported images from the USB/SD card. Only files that have been imported to your computer will be deleted. This action cannot be undone. Are you sure you want to continue?"
+                confirmText="Delete"
+                cancelText="Cancel"
+                confirmButtonClass="delete-confirm"
+            />
 
             <div className="bottom-left-controls">
                 <div className="sidebar-controls">
                     <button onClick={handleImport} disabled={isImporting} className="import-button">
                         {isImporting ? 'Importing...' : 'Import'}
+                    </button>
+                    <button 
+                        onClick={() => setShowDeleteModal(true)} 
+                        disabled={isDeleting} 
+                        className="delete-button"
+                    >
+                        {isDeleting ? 'Deleting...' : 'Delete Imported'}
                     </button>
                     <div className="date-picker-container">
                         <label htmlFor="since-date">Since:</label>
@@ -274,6 +320,16 @@ function App() {
                                 disabled={!currentDirectory}
                             />
                             <span>Add to current batch</span>
+                        </label>
+                    </div>
+                    <div className="checkbox-container">
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={importVideos}
+                                onChange={e => setImportVideos(e.target.checked)}
+                            />
+                            <span>Import videos (.MP4)</span>
                         </label>
                     </div>
                 </div>

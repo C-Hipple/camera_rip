@@ -90,6 +90,23 @@
     cursor: not-allowed;
 }
 
+.delete-button {
+    padding: 8px 16px;
+    font-size: 1rem;
+    background-color: #fb4934; /* Gruvbox Red */
+    color: #282828;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    width: 100%;
+}
+
+.delete-button:disabled {
+    background-color: #7c6f64;
+    cursor: not-allowed;
+}
+
 /* --- Main Content --- */
 .App-main {
   flex: 1;
