@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import './App.css';
@@ -24,6 +24,8 @@ function App() {
     const [isExportingRaw, setIsExportingRaw] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [carouselFilter, setCarouselFilter] = useState('all');
+    const currentPhotoNameRef = useRef(null);
 
     const fetchDirectories = useCallback(() => {
         fetch(`${API_URL}/api/directories`)
@@ -223,16 +225,71 @@ function App() {
         setIsDeleting(false);
     };
 
+    // Filter photos based on carousel filter mode
+    const filteredPhotos = React.useMemo(() => {
+        if (carouselFilter === 'selected') {
+            return photos.filter(photo => selectedPhotos.has(photo) || savedPhotos.has(photo));
+        }
+        return photos;
+    }, [photos, carouselFilter, selectedPhotos, savedPhotos]);
+
+    // Track current photo name
+    useEffect(() => {
+        if (filteredPhotos.length > 0 && currentIndex < filteredPhotos.length) {
+            currentPhotoNameRef.current = filteredPhotos[currentIndex];
+        }
+    }, [currentIndex, filteredPhotos]);
+
+    // Update currentIndex when filter changes
+    useEffect(() => {
+        if (filteredPhotos.length === 0) {
+            setCurrentIndex(0);
+            return;
+        }
+        const currentPhotoName = currentPhotoNameRef.current;
+        if (currentPhotoName && filteredPhotos.includes(currentPhotoName)) {
+            // Photo still in filtered list, find its new index
+            const newIndex = filteredPhotos.findIndex(photo => photo === currentPhotoName);
+            if (newIndex >= 0) {
+                setCurrentIndex(newIndex);
+            } else {
+                setCurrentIndex(0);
+            }
+        } else {
+            // Current photo not in filtered list, go to first photo
+            setCurrentIndex(0);
+        }
+    }, [carouselFilter]); // Only run when filter changes
+
+    // Ensure currentIndex is valid when filteredPhotos changes (e.g., when selections change)
+    useEffect(() => {
+        if (filteredPhotos.length === 0) {
+            setCurrentIndex(0);
+            return;
+        }
+        const currentPhotoName = currentPhotoNameRef.current;
+        if (currentPhotoName && filteredPhotos.includes(currentPhotoName)) {
+            // Current photo still in filtered list, ensure index is correct
+            const correctIndex = filteredPhotos.findIndex(photo => photo === currentPhotoName);
+            if (correctIndex >= 0) {
+                setCurrentIndex(correctIndex);
+            }
+        } else if (currentIndex >= filteredPhotos.length) {
+            // Index out of bounds, reset to 0
+            setCurrentIndex(0);
+        }
+    }, [filteredPhotos, currentIndex]); // Include currentIndex to check bounds
+
     const navigate = useCallback((direction) => {
-        if (photos.length === 0) return;
-        const newIndex = (currentIndex + direction + photos.length) % photos.length;
+        if (filteredPhotos.length === 0) return;
+        const newIndex = (currentIndex + direction + filteredPhotos.length) % filteredPhotos.length;
         setCurrentIndex(newIndex);
-    }, [currentIndex, photos.length]);
+    }, [currentIndex, filteredPhotos.length]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
-            if (photos.length === 0) return;
-            const currentPhotoName = photos[currentIndex];
+            if (filteredPhotos.length === 0) return;
+            const currentPhotoName = filteredPhotos[currentIndex];
 
             if (e.key === 's') {
                 handleSelection(currentPhotoName, true);
@@ -257,13 +314,15 @@ function App() {
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [currentIndex, photos, handleSelection, navigate, pinnedPhoto]);
+    }, [currentIndex, filteredPhotos, handleSelection, navigate, pinnedPhoto]);
 
-    const currentPhotoName = photos[currentIndex];
-    const isSelected = selectedPhotos.has(currentPhotoName);
-    const isSaved = savedPhotos.has(currentPhotoName);
-    const isPinnedSelected = selectedPhotos.has(pinnedPhoto);
-    const isPinnedSaved = savedPhotos.has(pinnedPhoto);
+    const currentPhotoName = filteredPhotos.length > 0 && currentIndex < filteredPhotos.length 
+        ? filteredPhotos[currentIndex] 
+        : null;
+    const isSelected = currentPhotoName ? selectedPhotos.has(currentPhotoName) : false;
+    const isSaved = currentPhotoName ? savedPhotos.has(currentPhotoName) : false;
+    const isPinnedSelected = pinnedPhoto ? selectedPhotos.has(pinnedPhoto) : false;
+    const isPinnedSaved = pinnedPhoto ? savedPhotos.has(pinnedPhoto) : false;
 
     return (
         <div className="App">
@@ -352,7 +411,7 @@ function App() {
 
 
             <main className="App-main">
-                {photos.length > 0 ? (
+                {filteredPhotos.length > 0 ? (
                     <>
                         <div className="main-photo-area">
                             {pinnedPhoto ? (
@@ -375,7 +434,7 @@ function App() {
                                                                             isSelected={isSelected}
                                                                             isSaved={isSaved}
                                                                         >
-                                                                            <p>{currentIndex + 1} / {photos.length}</p>
+                                                                            <p>{currentIndex + 1} / {filteredPhotos.length}</p>
                                                                             <p>{currentPhotoName}</p>
                                                                             <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : '')}`}>
                                                                                 {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : 'Not Selected')}
@@ -389,21 +448,33 @@ function App() {
                                                                         isSelected={isSelected}
                                                                         isSaved={isSaved}
                                                                     >
-                                                                        <p>{currentIndex + 1} / {photos.length}</p>
+                                                                        <p>{currentIndex + 1} / {filteredPhotos.length}</p>
                                                                         <p>{currentPhotoName}</p>
                                                                         <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : '')}`}>
                                                                             {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : 'Not Selected')}
                                                                         </p>
                                                                     </PhotoViewer>                            )}
                         </div>
-                        <Carousel
-                            photos={photos}
-                            currentIndex={currentIndex}
-                            setCurrentIndex={setCurrentIndex}
-                            currentDirectory={currentDirectory}
-                            selectedPhotos={selectedPhotos}
-                            savedPhotos={savedPhotos}
-                        />
+                        <div className="carousel-wrapper">
+                            <div className="carousel-filter-container">
+                                <select
+                                    value={carouselFilter}
+                                    onChange={e => setCarouselFilter(e.target.value)}
+                                    className="carousel-filter-select"
+                                >
+                                    <option value="all">All Images</option>
+                                    <option value="selected">Selected Only</option>
+                                </select>
+                            </div>
+                            <Carousel
+                                photos={filteredPhotos}
+                                currentIndex={currentIndex}
+                                setCurrentIndex={setCurrentIndex}
+                                currentDirectory={currentDirectory}
+                                selectedPhotos={selectedPhotos}
+                                savedPhotos={savedPhotos}
+                            />
+                        </div>
                     </>
                 ) : (
                     <div className="welcome-message">
@@ -414,14 +485,14 @@ function App() {
                 )}
 
                 <div className="controls">
-                    <button onClick={() => navigate(-1)} disabled={photos.length === 0}>Previous (← or j)</button>
+                    <button onClick={() => navigate(-1)} disabled={filteredPhotos.length === 0}>Previous (← or j)</button>
                     <button
                         onClick={() => handleSelection(currentPhotoName, !isSelected)}
-                        disabled={photos.length === 0 || isSaved}
+                        disabled={filteredPhotos.length === 0 || isSaved || !currentPhotoName}
                         className={`select-toggle-button ${isSaved ? 'saved' : (isSelected ? 'selected' : '')}`}>
                         {isSaved ? 'SAVED' : (isSelected ? 'Unselect (x)' : 'Select (s)')}
                     </button>
-                    <button onClick={() => navigate(1)} disabled={photos.length === 0}>Next (→ or k)</button>
+                    <button onClick={() => navigate(1)} disabled={filteredPhotos.length === 0}>Next (→ or k)</button>
                     <button onClick={handleSave} disabled={selectedPhotos.size === 0} className="save-button">
                         Save {selectedPhotos.size} new selections
                     </button>
