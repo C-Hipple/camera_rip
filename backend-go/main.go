@@ -66,6 +66,7 @@ func main() {
 	http.HandleFunc("/api/export-status", corsHandler(exportStatusHandler))
 	http.HandleFunc("/api/selected-photos", corsHandler(getSelectedPhotosHandler))
 	http.HandleFunc("/api/delete-imported", corsHandler(deleteImportedHandler))
+	http.HandleFunc("/api/delete-photos", corsHandler(deletePhotosHandler))
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
@@ -696,6 +697,96 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 		"not_found":    notFoundCount,
 		"errors":       errorCount,
 		"total_found":  deletedCount + notFoundCount + errorCount,
+	})
+}
+
+func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var data struct {
+		Directory string   `json:"directory"`
+		Files     []string `json:"files"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if data.Directory == "" {
+		http.Error(w, "Missing 'directory' in request", http.StatusBadRequest)
+		return
+	}
+
+	if len(data.Files) == 0 {
+		http.Error(w, "No files specified for deletion", http.StatusBadRequest)
+		return
+	}
+
+	targetDir := filepath.Join(photoBaseDir, data.Directory)
+	deletedCount := 0
+	notFoundCount := 0
+	errorCount := 0
+
+	for _, filename := range data.Files {
+		// Security: ensure filename doesn't contain path traversal
+		if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+			log.Printf("Skipping invalid filename: %s", filename)
+			errorCount++
+			continue
+		}
+
+		filePath := filepath.Join(targetDir, filename)
+		
+		// Verify the file is actually in the target directory
+		absPath, err := filepath.Abs(filePath)
+		if err != nil {
+			log.Printf("Failed to get absolute path for %s: %v", filePath, err)
+			errorCount++
+			continue
+		}
+		
+		absTargetDir, err := filepath.Abs(targetDir)
+		if err != nil {
+			log.Printf("Failed to get absolute path for target dir: %v", err)
+			errorCount++
+			continue
+		}
+		
+		if !strings.HasPrefix(absPath, absTargetDir) {
+			log.Printf("Security check failed: file path %s is outside target directory", absPath)
+			errorCount++
+			continue
+		}
+
+		if err := os.Remove(filePath); err != nil {
+			if os.IsNotExist(err) {
+				notFoundCount++
+			} else {
+				log.Printf("Failed to delete file %s: %v", filePath, err)
+				errorCount++
+			}
+		} else {
+			deletedCount++
+			log.Printf("Deleted file: %s", filename)
+			
+			// Also try to delete thumbnail if it exists
+			thumbnailPath := filepath.Join(thumbnailCacheDir, data.Directory, filename)
+			if err := os.Remove(thumbnailPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("Failed to delete thumbnail %s: %v", thumbnailPath, err)
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":   "Delete operation complete",
+		"deleted":   deletedCount,
+		"not_found": notFoundCount,
+		"errors":    errorCount,
 	})
 }
 
