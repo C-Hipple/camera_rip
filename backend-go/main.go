@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"flag"
 	"image"
 	"image/jpeg"
 	"io"
@@ -44,6 +45,9 @@ func (fs *spaFileSystem) Open(name string) (http.File, error) {
 }
 
 func main() {
+	devMode := flag.Bool("dev", false, "Run in development mode (do not serve static files)")
+	flag.Parse()
+
 	userHomeDir, err := os.UserHomeDir()
 	if err != nil {
 		log.Fatalf("Failed to get user home directory: %v", err)
@@ -63,6 +67,7 @@ func main() {
 	http.HandleFunc("/api/save", corsHandler(saveSelectedPhotosHandler))
 	http.HandleFunc("/api/import", corsHandler(importFromUSBHandler))
 	http.HandleFunc("/api/export-raw", corsHandler(exportRawFilesHandler))
+	http.HandleFunc("/api/export-raw-single", corsHandler(exportRawSingleFileHandler))
 	http.HandleFunc("/api/export-status", corsHandler(exportStatusHandler))
 	http.HandleFunc("/api/selected-photos", corsHandler(getSelectedPhotosHandler))
 	http.HandleFunc("/api/delete-imported", corsHandler(deleteImportedHandler))
@@ -70,12 +75,16 @@ func main() {
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
-	// Serve the frontend
-	fs, err := fs.Sub(frontend, "frontend/build")
-	if err != nil {
-		log.Fatalf("Failed to create sub file system: %v", err)
+	// Serve the frontend only if not in dev mode
+	if !*devMode {
+		fs, err := fs.Sub(frontend, "frontend/build")
+		if err != nil {
+			log.Fatalf("Failed to create sub file system: %v", err)
+		}
+		http.Handle("/", http.FileServer(&spaFileSystem{http.FS(fs)}))
+	} else {
+		log.Println("Running in dev mode. Frontend not served at root. Access via localhost:3000")
 	}
-	http.Handle("/", http.FileServer(&spaFileSystem{http.FS(fs)}))
 
 	log.Println("Starting server on :5001")
 	if err := http.ListenAndServe(":5001", nil); err != nil {
@@ -571,6 +580,95 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 		"skipped":        skippedCount,
 		"not_found":      notFoundCount,
 		"total_selected": len(jpegFiles),
+	})
+}
+
+func exportRawSingleFileHandler(w http.ResponseWriter, r *http.Request) {
+	var data struct {
+		Directory string `json:"directory"`
+		Filename  string `json:"filename"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if data.Directory == "" || data.Filename == "" {
+		http.Error(w, "Missing 'directory' or 'filename' in request", http.StatusBadRequest)
+		return
+	}
+
+	// Find USB/SD card mount point
+	usbMountPoint := findUSBMountPoint()
+	if usbMountPoint == "" {
+		http.Error(w, "USB device with 'DCIM/100CANON' directory not found. Is the SD card connected?", http.StatusNotFound)
+		return
+	}
+
+	sdCardDir := filepath.Join(usbMountPoint, "DCIM", "100CANON")
+	sourceDir := filepath.Join(photoBaseDir, data.Directory)
+	selectedDir := filepath.Join(sourceDir, "selected")
+	rawDestDir := filepath.Join(selectedDir, "raw")
+
+	// Create raw destination directory
+	if err := os.MkdirAll(rawDestDir, 0755); err != nil {
+		http.Error(w, "Failed to create raw destination directory", http.StatusInternalServerError)
+		return
+	}
+
+	// Get the base filename without extension
+	ext := filepath.Ext(data.Filename)
+	baseName := strings.TrimSuffix(data.Filename, ext)
+	rawFileName := baseName + ".CR3"
+
+	// Look for raw file on SD card
+	rawSourcePath := filepath.Join(sdCardDir, rawFileName)
+	rawDestPath := filepath.Join(rawDestDir, rawFileName)
+
+	// Check if raw file already exists at destination
+	if _, err := os.Stat(rawDestPath); err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "Raw file already exported",
+			"status":  "skipped",
+		})
+		return
+	}
+
+	// Check if raw file exists on SD card
+	if _, err := os.Stat(rawSourcePath); os.IsNotExist(err) {
+		http.Error(w, "Raw file not found on SD card", http.StatusNotFound)
+		return
+	}
+
+	// Copy the raw file from SD card
+	source, err := os.Open(rawSourcePath)
+	if err != nil {
+		log.Printf("Failed to open source raw file: %v", err)
+		http.Error(w, "Failed to open source raw file", http.StatusInternalServerError)
+		return
+	}
+	defer source.Close()
+
+	destination, err := os.Create(rawDestPath)
+	if err != nil {
+		log.Printf("Failed to create destination raw file: %v", err)
+		http.Error(w, "Failed to create destination raw file", http.StatusInternalServerError)
+		return
+	}
+	defer destination.Close()
+
+	if _, err := io.Copy(destination, source); err != nil {
+		log.Printf("Failed to copy raw file: %v", err)
+		http.Error(w, "Failed to copy raw file", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Raw file export complete",
+		"status":  "copied",
 	})
 }
 
