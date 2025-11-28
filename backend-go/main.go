@@ -300,11 +300,15 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 
 	usbMountPoint := findUSBMountPoint()
 	if usbMountPoint == "" {
-		http.Error(w, "USB device with 'DCIM/100CANON' directory not found. Is it connected?", http.StatusNotFound)
+		http.Error(w, "USB device with 'DCIM/100CANON' or 'DCIM/101CANON' directory not found. Is it connected?", http.StatusNotFound)
 		return
 	}
 
-	sourceDir := filepath.Join(usbMountPoint, "DCIM", "100CANON")
+	canonDirs := findCanonDirectories(usbMountPoint)
+	if len(canonDirs) == 0 {
+		http.Error(w, "Could not find 100CANON or 101CANON directory on USB device", http.StatusNotFound)
+		return
+	}
 	
 	// Determine destination directory: use target if specified, otherwise create new timestamped directory
 	var destinationDir string
@@ -324,9 +328,26 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	
 	destinationDirCreated := !isNewBatch // If adding to existing, directory already exists
 
-	files, err := ioutil.ReadDir(sourceDir)
-	if err != nil {
-		http.Error(w, "Failed to read source directory", http.StatusInternalServerError)
+	// Read files from all CANON directories, tracking which directory each file came from
+	type fileWithDir struct {
+		file os.FileInfo
+		dir  string
+	}
+	var allFiles []fileWithDir
+	for _, canonDir := range canonDirs {
+		sourceDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+		files, err := ioutil.ReadDir(sourceDir)
+		if err != nil {
+			log.Printf("Failed to read directory %s: %v", sourceDir, err)
+			continue
+		}
+		for _, file := range files {
+			allFiles = append(allFiles, fileWithDir{file: file, dir: canonDir})
+		}
+	}
+	
+	if len(allFiles) == 0 {
+		http.Error(w, "No files found in CANON directories", http.StatusNotFound)
 		return
 	}
 
@@ -340,7 +361,8 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	copiedCount := 0
 	skippedDuplicates := 0
 	var copiedFiles []string
-	for _, file := range files {
+	for _, fileEntry := range allFiles {
+		file := fileEntry.file
 		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
 			lowerName := strings.ToLower(file.Name())
 			// Process .jpg files always, and .mp4 files only if import_videos is enabled
@@ -350,6 +372,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
 			sourceFile := filepath.Join(sourceDir, file.Name())
 
 			if !sinceDate.IsZero() {
@@ -476,11 +499,16 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 	// Find USB/SD card mount point
 	usbMountPoint := findUSBMountPoint()
 	if usbMountPoint == "" {
-		http.Error(w, "USB device with 'DCIM/100CANON' directory not found. Is the SD card connected?", http.StatusNotFound)
+		http.Error(w, "USB device with 'DCIM/100CANON' or 'DCIM/101CANON' directory not found. Is the SD card connected?", http.StatusNotFound)
 		return
 	}
 
-	sdCardDir := filepath.Join(usbMountPoint, "DCIM", "100CANON")
+	canonDirs := findCanonDirectories(usbMountPoint)
+	if len(canonDirs) == 0 {
+		http.Error(w, "Could not find 100CANON or 101CANON directory on USB device", http.StatusNotFound)
+		return
+	}
+
 	sourceDir := filepath.Join(photoBaseDir, data.Directory)
 	selectedDir := filepath.Join(sourceDir, "selected")
 	rawDestDir := filepath.Join(selectedDir, "raw")
@@ -524,8 +552,19 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 		baseName := strings.TrimSuffix(jpegFile, ext)
 		rawFileName := baseName + ".CR3"
 
-		// Look for raw file on SD card
-		rawSourcePath := filepath.Join(sdCardDir, rawFileName)
+		// Look for raw file on SD card in both directories
+		var rawSourcePath string
+		var found bool
+		for _, canonDir := range canonDirs {
+			sdCardDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+			checkPath := filepath.Join(sdCardDir, rawFileName)
+			if _, err := os.Stat(checkPath); err == nil {
+				rawSourcePath = checkPath
+				found = true
+				break
+			}
+		}
+		
 		rawDestPath := filepath.Join(rawDestDir, rawFileName)
 
 		// Check if raw file already exists at destination
@@ -535,8 +574,8 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Check if raw file exists on SD card
-		if _, err := os.Stat(rawSourcePath); os.IsNotExist(err) {
-			log.Printf("Raw file not found on SD card: %s", rawSourcePath)
+		if !found {
+			log.Printf("Raw file not found on SD card in any CANON directory: %s", rawFileName)
 			notFoundCount++
 			continue
 		}
@@ -643,14 +682,13 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 	// Find USB/SD card mount point
 	usbMountPoint := findUSBMountPoint()
 	if usbMountPoint == "" {
-		http.Error(w, "USB device with 'DCIM/100CANON' directory not found. Is it connected?", http.StatusNotFound)
+		http.Error(w, "USB device with 'DCIM/100CANON' or 'DCIM/101CANON' directory not found. Is it connected?", http.StatusNotFound)
 		return
 	}
 
-	sourceDir := filepath.Join(usbMountPoint, "DCIM", "100CANON")
-	files, err := ioutil.ReadDir(sourceDir)
-	if err != nil {
-		http.Error(w, "Failed to read source directory", http.StatusInternalServerError)
+	canonDirs := findCanonDirectories(usbMountPoint)
+	if len(canonDirs) == 0 {
+		http.Error(w, "Could not find 100CANON or 101CANON directory on USB device", http.StatusNotFound)
 		return
 	}
 
@@ -662,29 +700,39 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 	notFoundCount := 0
 	errorCount := 0
 
-	for _, file := range files {
-		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
-			lowerName := strings.ToLower(file.Name())
-			// Process both .jpg and .mp4 files
-			isJpg := strings.HasSuffix(lowerName, ".jpg")
-			isMp4 := strings.HasSuffix(lowerName, ".mp4")
-			if !isJpg && !isMp4 {
-				continue
-			}
+	// Process files from all CANON directories
+	for _, canonDir := range canonDirs {
+		sourceDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+		files, err := ioutil.ReadDir(sourceDir)
+		if err != nil {
+			log.Printf("Failed to read directory %s: %v", sourceDir, err)
+			continue
+		}
 
-			// Only delete files that are in the imported set
-			if importedFiles[file.Name()] {
-				filePath := filepath.Join(sourceDir, file.Name())
-				if err := os.Remove(filePath); err != nil {
-					if os.IsNotExist(err) {
-						notFoundCount++
+		for _, file := range files {
+			if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
+				lowerName := strings.ToLower(file.Name())
+				// Process both .jpg and .mp4 files
+				isJpg := strings.HasSuffix(lowerName, ".jpg")
+				isMp4 := strings.HasSuffix(lowerName, ".mp4")
+				if !isJpg && !isMp4 {
+					continue
+				}
+
+				// Only delete files that are in the imported set
+				if importedFiles[file.Name()] {
+					filePath := filepath.Join(sourceDir, file.Name())
+					if err := os.Remove(filePath); err != nil {
+						if os.IsNotExist(err) {
+							notFoundCount++
+						} else {
+							log.Printf("Failed to delete file %s: %v", filePath, err)
+							errorCount++
+						}
 					} else {
-						log.Printf("Failed to delete file %s: %v", filePath, err)
-						errorCount++
+						deletedCount++
+						log.Printf("Deleted imported file: %s", file.Name())
 					}
-				} else {
-					deletedCount++
-					log.Printf("Deleted imported file: %s", file.Name())
 				}
 			}
 		}
@@ -790,6 +838,28 @@ func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// findCanonDirectories returns all existing CANON directories (100CANON and/or 101CANON)
+func findCanonDirectories(mountPoint string) []string {
+	var canonDirs []string
+	checkDirs := []string{"100CANON", "101CANON"}
+	for _, canonDir := range checkDirs {
+		checkPath := filepath.Join(mountPoint, "DCIM", canonDir)
+		if _, err := os.Stat(checkPath); err == nil {
+			canonDirs = append(canonDirs, canonDir)
+		}
+	}
+	return canonDirs
+}
+
+// findCanonDirectory checks for both 100CANON and 101CANON directories (returns first found for backward compatibility)
+func findCanonDirectory(mountPoint string) string {
+	canonDirs := findCanonDirectories(mountPoint)
+	if len(canonDirs) > 0 {
+		return canonDirs[0]
+	}
+	return ""
+}
+
 func findUSBMountPoint() string {
 	switch runtime.GOOS {
 	case "darwin":
@@ -801,8 +871,7 @@ func findUSBMountPoint() string {
 		for _, dir := range dirs {
 			if dir.IsDir() {
 				mountPoint := filepath.Join(volumesDir, dir.Name())
-				checkPath := filepath.Join(mountPoint, "DCIM", "100CANON")
-				if _, err := os.Stat(checkPath); err == nil {
+				if findCanonDirectory(mountPoint) != "" {
 					return mountPoint
 				}
 			}
@@ -816,8 +885,7 @@ func findUSBMountPoint() string {
 		for _, dir := range dirs {
 			if dir.IsDir() {
 				mountPoint := filepath.Join(mediaDir, dir.Name())
-				checkPath := filepath.Join(mountPoint, "DCIM", "100CANON")
-				if _, err := os.Stat(checkPath); err == nil {
+				if findCanonDirectory(mountPoint) != "" {
 					return mountPoint
 				}
 			}

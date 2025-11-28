@@ -432,6 +432,15 @@ function App() {
 
             <div className="bottom-left-controls">
                 <div className="sidebar-controls">
+                    {filteredPhotos.length > 0 && currentPhotoName && (
+                        <div className="photo-info-sidebar">
+                            <p>{currentIndex + 1} / {filteredPhotos.length}</p>
+                            <p>{currentPhotoName}</p>
+                            <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : (isDeleted ? 'status-deleted' : ''))}`}>
+                                {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : (isDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
+                            </p>
+                        </div>
+                    )}
                     <button onClick={handleImport} disabled={isImporting} className="import-button">
                         {isImporting ? 'Importing...' : 'Import'}
                     </button>
@@ -528,13 +537,7 @@ function App() {
                                                                             isSelected={isSelected}
                                                                             isSaved={isSaved}
                                                                             isDeleted={isDeleted}
-                                                                        >
-                                                                            <p>{currentIndex + 1} / {filteredPhotos.length}</p>
-                                                                            <p>{currentPhotoName}</p>
-                                                                            <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : (isDeleted ? 'status-deleted' : ''))}`}>
-                                                                                {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : (isDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
-                                                                            </p>
-                                                                        </PhotoViewer>
+                                                                        />
                                                                     </div>
                                                                 ) : (
                                                                     <PhotoViewer
@@ -543,13 +546,7 @@ function App() {
                                                                         isSelected={isSelected}
                                                                         isSaved={isSaved}
                                                                         isDeleted={isDeleted}
-                                                                    >
-                                                                        <p>{currentIndex + 1} / {filteredPhotos.length}</p>
-                                                                        <p>{currentPhotoName}</p>
-                                                                        <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : (isDeleted ? 'status-deleted' : ''))}`}>
-                                                                            {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : (isDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
-                                                                        </p>
-                                                                    </PhotoViewer>                            )}
+                                                                    />                            )}
                             </div>
                         ) : (
                             <div className="main-photo-area">
