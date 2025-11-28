@@ -49,3 +49,13 @@ clean:
 	rm -f backend-go/camera-rip
 	@echo "Clean complete!"
 
+
+# Run backend in dev mode (skips frontend build/copy)
+dev-backend:
+	@echo "Starting backend in dev mode..."
+	cd backend-go && env -u GOROOT go run main.go -dev
+
+# Run frontend in dev mode
+dev-frontend:
+	@echo "Starting frontend in dev mode..."
+	cd frontend && npm start
