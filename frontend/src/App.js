@@ -28,7 +28,6 @@ function App() {
     const [showDeletePhotosModal, setShowDeletePhotosModal] = useState(false);
     const [isDeletingPhotos, setIsDeletingPhotos] = useState(false);
     const [carouselFilter, setCarouselFilter] = useState('all');
-    const [showControls, setShowControls] = useState(false);
     const currentPhotoNameRef = useRef(null);
 
     const fetchDirectories = useCallback(() => {
@@ -73,7 +72,7 @@ function App() {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
+                body: JSON.stringify({ 
                     since: sinceDate,
                     skip_duplicates: skipDuplicates,
                     target_directory: addToCurrentBatch ? currentDirectory : '',
@@ -114,7 +113,7 @@ function App() {
                 }
             })
             .catch(err => toast.error("Error fetching photos."));
-
+        
         fetch(`${API_URL}/api/selected-photos?directory=${currentDirectory}`)
             .then(res => res.json())
             .then(data => {
@@ -192,21 +191,21 @@ function App() {
                 selected_files: allFilesToSave,
             }),
         })
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) {
-                    toast.update(toastId, { render: data.error, type: "error", isLoading: false, autoClose: 5000 });
-                } else {
-                    toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
-                    // Move selected to saved and clear selected
-                    setSavedPhotos(new Set(allFilesToSave));
-                    setSelectedPhotos(new Set());
-                    fetchExportStatus(); // Update export status after save
-                }
-            })
-            .catch(err => {
-                toast.update(toastId, { render: "An error occurred while saving.", type: "error", isLoading: false, autoClose: 5000 });
-            });
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                toast.update(toastId, { render: data.error, type: "error", isLoading: false, autoClose: 5000 });
+            } else {
+                toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
+                // Move selected to saved and clear selected
+                setSavedPhotos(new Set(allFilesToSave));
+                setSelectedPhotos(new Set());
+                fetchExportStatus(); // Update export status after save
+            }
+        })
+        .catch(err => {
+            toast.update(toastId, { render: "An error occurred while saving.", type: "error", isLoading: false, autoClose: 5000 });
+        });
     };
 
     const handleExportRaw = async () => {
@@ -232,37 +231,6 @@ function App() {
             toast.update(toastId, { render: "Failed to export raw files.", type: "error", isLoading: false, autoClose: 5000 });
         }
         setIsExportingRaw(false);
-    };
-
-    const handleExportCurrentRaw = async () => {
-        if (!currentPhotoName) return;
-
-        const toastId = toast.loading(`Exporting raw file for ${currentPhotoName}...`);
-        try {
-            const response = await fetch(`${API_URL}/api/export-raw-single`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    directory: currentDirectory,
-                    filename: currentPhotoName
-                })
-            });
-            const data = await response.json();
-            if (response.ok) {
-                if (data.status === 'skipped') {
-                    toast.update(toastId, { render: "Raw file already exported.", type: "info", isLoading: false, autoClose: 3000 });
-                } else {
-                    toast.update(toastId, { render: "Raw file exported successfully.", type: "success", isLoading: false, autoClose: 3000 });
-                    fetchExportStatus(); // Update export status
-                }
-            } else {
-                toast.update(toastId, { render: data.error || 'An unknown error occurred.', type: "error", isLoading: false, autoClose: 5000 });
-            }
-        } catch (err) {
-            toast.update(toastId, { render: "Failed to export raw file.", type: "error", isLoading: false, autoClose: 5000 });
-        }
     };
 
     const handleDeleteImported = async () => {
@@ -428,8 +396,8 @@ function App() {
         };
     }, [currentIndex, filteredPhotos, handleSelection, handleDeletion, navigate, pinnedPhoto, deletedPhotos]);
 
-    const currentPhotoName = filteredPhotos.length > 0 && currentIndex < filteredPhotos.length
-        ? filteredPhotos[currentIndex]
+    const currentPhotoName = filteredPhotos.length > 0 && currentIndex < filteredPhotos.length 
+        ? filteredPhotos[currentIndex] 
         : null;
     const isSelected = currentPhotoName ? selectedPhotos.has(currentPhotoName) : false;
     const isSaved = currentPhotoName ? savedPhotos.has(currentPhotoName) : false;
@@ -462,86 +430,83 @@ function App() {
                 confirmButtonClass="delete-confirm"
             />
 
-            <div className={`bottom-left-controls ${showControls ? 'open' : 'closed'}`}>
-                <button
-                    className="controls-toggle-button"
-                    onClick={() => setShowControls(!showControls)}
-                    title={showControls ? "Hide Controls" : "Show Controls"}
-                >
-                    {showControls ? '▼' : '⚙️'}
-                </button>
-
-                {showControls && (
-                    <div className="controls-content">
-                        <div className="sidebar-controls">
-                            <button onClick={handleImport} disabled={isImporting} className="import-button">
-                                {isImporting ? 'Importing...' : 'Import'}
-                            </button>
-                            <div className="date-picker-container">
-                                <label htmlFor="since-date">Since:</label>
-                                <input
-                                    type="date"
-                                    id="since-date"
-                                    value={sinceDate}
-                                    onChange={e => setSinceDate(e.target.value)}
-                                    className="date-picker"
-                                />
-                            </div>
-                            <div className="checkbox-container">
-                                <label>
-                                    <input
-                                        type="checkbox"
-                                        checked={skipDuplicates}
-                                        onChange={e => setSkipDuplicates(e.target.checked)}
-                                    />
-                                    <span>Skip already imported</span>
-                                </label>
-                            </div>
-                            <div className="checkbox-container">
-                                <label>
-                                    <input
-                                        type="checkbox"
-                                        checked={addToCurrentBatch}
-                                        onChange={e => setAddToCurrentBatch(e.target.checked)}
-                                        disabled={!currentDirectory}
-                                    />
-                                    <span>Add to current batch</span>
-                                </label>
-                            </div>
-                            <div className="checkbox-container">
-                                <label>
-                                    <input
-                                        type="checkbox"
-                                        checked={importVideos}
-                                        onChange={e => setImportVideos(e.target.checked)}
-                                    />
-                                    <span>Import videos (.MP4)</span>
-                                </label>
-                            </div>
+            <div className="bottom-left-controls">
+                <div className="sidebar-controls">
+                    {filteredPhotos.length > 0 && currentPhotoName && (
+                        <div className="photo-info-sidebar">
+                            <p>{currentIndex + 1} / {filteredPhotos.length}</p>
+                            <p>{currentPhotoName}</p>
+                            <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : (isDeleted ? 'status-deleted' : ''))}`}>
+                                {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : (isDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
+                            </p>
                         </div>
-
-                        <div className="sidebar-controls">
-                            {directories.length > 0 && (
-                                <select
-                                    value={currentDirectory}
-                                    onChange={e => setCurrentDirectory(e.target.value)}
-                                    className="directory-selector"
-                                >
-                                    {directories.map(dir => (
-                                        <option key={dir} value={dir}>{dir}</option>
-                                    ))}
-                                </select>
-                            )}
-                            <button
-                                onClick={() => setShowDeleteModal(true)}
-                                disabled={isDeleting}
-                                className="delete-button"
-                            >
-                                {isDeleting ? 'Deleting...' : 'Delete Already Imported from SD Card'}
-                            </button>
-                        </div>
+                    )}
+                    <button onClick={handleImport} disabled={isImporting} className="import-button">
+                        {isImporting ? 'Importing...' : 'Import'}
+                    </button>
+                    <div className="date-picker-container">
+                        <label htmlFor="since-date">Since:</label>
+                        <input
+                            type="date"
+                            id="since-date"
+                            value={sinceDate}
+                            onChange={e => setSinceDate(e.target.value)}
+                            className="date-picker"
+                        />
                     </div>
-                )}
+                    <div className="checkbox-container">
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={skipDuplicates}
+                                onChange={e => setSkipDuplicates(e.target.checked)}
+                            />
+                            <span>Skip already imported</span>
+                        </label>
+                    </div>
+                    <div className="checkbox-container">
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={addToCurrentBatch}
+                                onChange={e => setAddToCurrentBatch(e.target.checked)}
+                                disabled={!currentDirectory}
+                            />
+                            <span>Add to current batch</span>
+                        </label>
+                    </div>
+                    <div className="checkbox-container">
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={importVideos}
+                                onChange={e => setImportVideos(e.target.checked)}
+                            />
+                            <span>Import videos (.MP4)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div className="sidebar-controls">
+                    {directories.length > 0 && (
+                        <select
+                            value={currentDirectory}
+                            onChange={e => setCurrentDirectory(e.target.value)}
+                            className="directory-selector"
+                        >
+                            {directories.map(dir => (
+                                <option key={dir} value={dir}>{dir}</option>
+                            ))}
+                        </select>
+                    )}
+                    <button 
+                        onClick={() => setShowDeleteModal(true)} 
+                        disabled={isDeleting} 
+                        className="delete-button"
+                    >
+                        {isDeleting ? 'Deleting...' : 'Delete Already Imported from SD Card'}
+                    </button>
+                </div>
             </div>
 
 
@@ -553,60 +518,48 @@ function App() {
                             <div className="main-photo-area">
                                 {pinnedPhoto ? (
                                     <div className="comparison-container">
-                                        <PhotoViewer
-                                            photoName={pinnedPhoto}
-                                            directory={currentDirectory}
-                                            isSelected={isPinnedSelected}
-                                            isSaved={isPinnedSaved}
-                                            isDeleted={isPinnedDeleted}
-                                        >
-                                            <p>{pinnedPhoto}</p>
-                                            <p className={`status ${isPinnedSaved ? 'status-saved' : (isPinnedSelected ? 'status-selected' : (isPinnedDeleted ? 'status-deleted' : ''))}`}>
-                                                {isPinnedSaved ? 'SAVED' : (isPinnedSelected ? 'SELECTED' : (isPinnedDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
-                                            </p>
-                                            <p className="status status-pinned">PINNED</p>
-                                        </PhotoViewer>
-                                        <PhotoViewer
-                                            photoName={currentPhotoName}
-                                            directory={currentDirectory}
-                                            isSelected={isSelected}
-                                            isSaved={isSaved}
-                                            isDeleted={isDeleted}
-                                        >
-                                            <p>{currentIndex + 1} / {filteredPhotos.length}</p>
-                                            <p>{currentPhotoName}</p>
-                                            <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : (isDeleted ? 'status-deleted' : ''))}`}>
-                                                {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : (isDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
-                                            </p>
-                                        </PhotoViewer>
-                                    </div>
-                                ) : (
-                                    <PhotoViewer
-                                        photoName={currentPhotoName}
-                                        directory={currentDirectory}
-                                        isSelected={isSelected}
-                                        isSaved={isSaved}
-                                        isDeleted={isDeleted}
-                                    >
-                                        <p>{currentIndex + 1} / {filteredPhotos.length}</p>
-                                        <p>{currentPhotoName}</p>
-                                        <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : (isDeleted ? 'status-deleted' : ''))}`}>
-                                            {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : (isDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
-                                        </p>
-                                    </PhotoViewer>)}
+                                                                         <PhotoViewer
+                                                                            photoName={pinnedPhoto}
+                                                                            directory={currentDirectory}
+                                                                            isSelected={isPinnedSelected}
+                                                                            isSaved={isPinnedSaved}
+                                                                            isDeleted={isPinnedDeleted}
+                                                                        >
+                                                                            <p>{pinnedPhoto}</p>
+                                                                            <p className={`status ${isPinnedSaved ? 'status-saved' : (isPinnedSelected ? 'status-selected' : (isPinnedDeleted ? 'status-deleted' : ''))}`}>
+                                                                                {isPinnedSaved ? 'SAVED' : (isPinnedSelected ? 'SELECTED' : (isPinnedDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
+                                                                            </p>
+                                                                            <p className="status status-pinned">PINNED</p>
+                                                                        </PhotoViewer>
+                                                                        <PhotoViewer
+                                                                            photoName={currentPhotoName}
+                                                                            directory={currentDirectory}
+                                                                            isSelected={isSelected}
+                                                                            isSaved={isSaved}
+                                                                            isDeleted={isDeleted}
+                                                                        />
+                                                                    </div>
+                                                                ) : (
+                                                                    <PhotoViewer
+                                                                        photoName={currentPhotoName}
+                                                                        directory={currentDirectory}
+                                                                        isSelected={isSelected}
+                                                                        isSaved={isSaved}
+                                                                        isDeleted={isDeleted}
+                                                                    />                            )}
                             </div>
                         ) : (
                             <div className="main-photo-area">
                                 <div className="empty-filter-message">
                                     <h2>
-                                        {carouselFilter === 'selected' ? 'No Selected Photos' :
-                                            carouselFilter === 'deleted' ? 'No Photos Marked for Deletion' :
-                                                'No Photos'}
+                                        {carouselFilter === 'selected' ? 'No Selected Photos' : 
+                                         carouselFilter === 'deleted' ? 'No Photos Marked for Deletion' : 
+                                         'No Photos'}
                                     </h2>
                                     <p>
                                         {carouselFilter === 'selected' ? 'Switch to "All Images" or select some photos to view them here.' :
-                                            carouselFilter === 'deleted' ? 'Switch to "All Images" or mark some photos for deletion to view them here.' :
-                                                'No photos available.'}
+                                         carouselFilter === 'deleted' ? 'Switch to "All Images" or mark some photos for deletion to view them here.' :
+                                         'No photos available.'}
                                     </p>
                                 </div>
                             </div>
@@ -666,26 +619,16 @@ function App() {
                     <button onClick={handleSave} disabled={selectedPhotos.size === 0} className="save-button">
                         Save {selectedPhotos.size} new selections
                     </button>
-                    <div style={{ display: 'inline-flex', flexDirection: 'column', verticalAlign: 'middle', gap: '5px', margin: '0 10px' }}>
-                        <button
-                            onClick={handleExportRaw}
-                            disabled={exportStatus.selected_count === 0 || isExportingRaw}
-                            className="export-raw-button"
-                            style={{ margin: 0 }}>
-                            {isExportingRaw ? 'Exporting...' : `Export Raw Files (${exportStatus.missing_count} missing)`}
-                        </button>
-                        <button
-                            onClick={handleExportCurrentRaw}
-                            disabled={!currentPhotoName || isExportingRaw}
-                            className="export-raw-button"
-                            style={{ margin: 0, fontSize: '0.8rem', padding: '5px 10px', opacity: (!currentPhotoName || isExportingRaw) ? 0.5 : 0.8 }}>
-                            Export Current Raw
-                        </button>
-                    </div>
+                    <button 
+                        onClick={handleExportRaw} 
+                        disabled={exportStatus.selected_count === 0 || isExportingRaw} 
+                        className="export-raw-button">
+                        {isExportingRaw ? 'Exporting...' : `Export Raw Files (${exportStatus.missing_count} missing)`}
+                    </button>
                     {carouselFilter === 'deleted' && deletedPhotos.size > 0 && (
-                        <button
-                            onClick={() => setShowDeletePhotosModal(true)}
-                            disabled={isDeletingPhotos}
+                        <button 
+                            onClick={() => setShowDeletePhotosModal(true)} 
+                            disabled={isDeletingPhotos} 
                             className="delete-photos-button">
                             {isDeletingPhotos ? 'Deleting...' : `Delete ${deletedPhotos.size} Photo(s) from Hard Drive`}
                         </button>

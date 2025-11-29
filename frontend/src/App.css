@@ -1,7 +1,6 @@
 .App {
   display: flex;
-  background-color: #282828;
-  /* Gruvbox Background */
+  background-color: #282828; /* Gruvbox Background */
   min-height: 100vh;
   color: #d7af5f;
 }
@@ -11,77 +10,19 @@
   position: absolute;
   bottom: 20px;
   left: 20px;
-  z-index: 100;
-  /* Higher z-index to sit above everything */
+  z-index: 10;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.controls-toggle-button {
-  background-color: #3c3836;
-  color: #ebdbb2;
-  border: 1px solid #a89984;
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.2rem;
-  cursor: pointer;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
-  transition: all 0.3s ease;
-}
-
-.controls-toggle-button:hover {
-  background-color: #504945;
-  transform: scale(1.1);
-}
-
-.controls-content {
-  background-color: rgba(40, 40, 40, 0.95);
-  /* Semi-transparent background */
-  padding: 15px;
-  border-radius: 8px;
-  border: 1px solid #504945;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-  min-width: 250px;
-  backdrop-filter: blur(5px);
-  animation: fadeIn 0.2s ease-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  gap: 20px;
 }
 
 .sidebar-controls {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-/* Remove top border from first sidebar-control if inside content */
-.sidebar-controls:first-child {
-  border-top: none;
-  padding-top: 0;
-}
-
-.sidebar-controls:not(:first-child) {
+  gap: 15px;
   border-top: 1px solid #504945;
-  padding-top: 15px;
+  padding-top: 20px;
 }
 
 .date-picker-container {
@@ -133,44 +74,42 @@
 }
 
 .import-button {
-  padding: 8px 16px;
-  font-size: 1rem;
-  background-color: #d79921;
-  /* Gruvbox Yellow */
-  color: #282828;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  font-weight: bold;
-  width: 100%;
+    padding: 8px 16px;
+    font-size: 1rem;
+    background-color: #d79921; /* Gruvbox Yellow */
+    color: #282828;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    width: 100%;
 }
 
 .import-button:disabled {
-  background-color: #7c6f64;
-  cursor: not-allowed;
+    background-color: #7c6f64;
+    cursor: not-allowed;
 }
 
 .delete-button {
-  padding: 8px 16px;
-  font-size: 1rem;
-  background-color: #fb4934;
-  /* Gruvbox Red */
-  color: #282828;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  font-weight: bold;
-  width: 100%;
-  max-width: 200px;
-  white-space: normal;
-  word-wrap: break-word;
-  line-height: 1.3;
-  text-align: center;
+    padding: 8px 16px;
+    font-size: 1rem;
+    background-color: #fb4934; /* Gruvbox Red */
+    color: #282828;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    width: 100%;
+    max-width: 200px;
+    white-space: normal;
+    word-wrap: break-word;
+    line-height: 1.3;
+    text-align: center;
 }
 
 .delete-button:disabled {
-  background-color: #7c6f64;
-  cursor: not-allowed;
+    background-color: #7c6f64;
+    cursor: not-allowed;
 }
 
 /* --- Main Content --- */
@@ -187,14 +126,13 @@
   margin: auto;
   width: 100%;
   max-width: 100%;
-  height: 65vh;
-  max-height: 65vh;
+  height: 70vh;
+  max-height: 70vh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-  /* Hide overflowing parts of the zoomed image */
+  overflow: hidden; /* Hide overflowing parts of the zoomed image */
   position: relative;
 }
 
@@ -213,8 +151,7 @@
   max-height: 100%;
   width: auto;
   height: auto;
-  border: 5px solid #3c3836;
-  /* Gruvbox Dark Gray */
+  border: 5px solid #3c3836; /* Gruvbox Dark Gray */
   border-radius: 5px;
   transition: border-color 0.3s;
   object-fit: contain;
@@ -222,17 +159,34 @@
 }
 
 .photo-display.selected {
-  border-color: #458588;
-  /* Gruvbox Blue */
+  border-color: #458588; /* Gruvbox Blue */
 }
 
 .photo-display.deleted {
-  border-color: #fb4934;
-  /* Gruvbox Red */
+  border-color: #fb4934; /* Gruvbox Red */
 }
 
 .photo-info {
   margin-top: 10px;
+}
+
+.photo-info-sidebar {
+  padding: 10px;
+  margin-bottom: 15px;
+  background-color: #3c3836; /* Gruvbox Dark Gray */
+  border-radius: 5px;
+  border: 1px solid #504945;
+  text-align: center;
+}
+
+.photo-info-sidebar p {
+  margin: 5px 0;
+  color: #ebdbb2;
+}
+
+.photo-info-sidebar p:first-child {
+  font-weight: bold;
+  font-size: 1.1rem;
 }
 
 .status {
@@ -242,13 +196,11 @@
 }
 
 .status-selected {
-  color: #458588;
-  /* Gruvbox Blue */
+  color: #458588; /* Gruvbox Blue */
 }
 
 .status-deleted {
-  color: #fb4934;
-  /* Gruvbox Red */
+  color: #fb4934; /* Gruvbox Red */
   font-weight: bold;
 }
 
@@ -263,8 +215,7 @@
   margin: 0 10px;
   cursor: pointer;
   border-radius: 5px;
-  border: 1px solid #a89984;
-  /* Gruvbox Gray */
+  border: 1px solid #a89984; /* Gruvbox Gray */
   background-color: transparent;
   color: #ebdbb2;
 }
@@ -275,57 +226,50 @@
 }
 
 .select-toggle-button.selected {
-  background-color: #98971a;
-  /* Gruvbox Green */
-  color: #282828;
-  border-color: #98971a;
-  font-weight: bold;
+    background-color: #98971a; /* Gruvbox Green */
+    color: #282828;
+    border-color: #98971a;
+    font-weight: bold;
 }
 
 .delete-toggle-button {
-  background-color: transparent;
-  color: #ebdbb2;
+    background-color: transparent;
+    color: #ebdbb2;
 }
 
 .delete-toggle-button.deleted {
-  background-color: #fb4934;
-  /* Gruvbox Red */
-  color: #282828;
-  border-color: #fb4934;
-  font-weight: bold;
+    background-color: #fb4934; /* Gruvbox Red */
+    color: #282828;
+    border-color: #fb4934;
+    font-weight: bold;
 }
 
 .save-button {
-  background-color: #458588;
-  /* Gruvbox Blue */
+  background-color: #458588; /* Gruvbox Blue */
   color: #ebdbb2;
   font-weight: bold;
 }
 
 .export-raw-button {
-  background-color: #d65d0e;
-  /* Gruvbox Orange */
+  background-color: #d65d0e; /* Gruvbox Orange */
   color: #ebdbb2;
   font-weight: bold;
 }
 
 .export-raw-button:disabled {
-  background-color: #7c6f64;
-  /* Gruvbox Dark Gray */
+  background-color: #7c6f64; /* Gruvbox Dark Gray */
   cursor: not-allowed;
   opacity: 0.5;
 }
 
 .delete-photos-button {
-  background-color: #fb4934;
-  /* Gruvbox Red */
+  background-color: #fb4934; /* Gruvbox Red */
   color: #282828;
   font-weight: bold;
 }
 
 .delete-photos-button:disabled {
-  background-color: #7c6f64;
-  /* Gruvbox Dark Gray */
+  background-color: #7c6f64; /* Gruvbox Dark Gray */
   cursor: not-allowed;
   opacity: 0.5;
 }
@@ -333,8 +277,7 @@
 .instructions {
   margin-top: 20px;
   font-style: italic;
-  color: #a89984;
-  /* Gruvbox Gray */
+  color: #a89984; /* Gruvbox Gray */
 }
 
 .empty-filter-message {
@@ -342,9 +285,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 65vh;
-  color: #a89984;
-  /* Gruvbox Gray */
+  height: 70vh;
+  color: #a89984; /* Gruvbox Gray */
 }
 
 .empty-filter-message h2 {
@@ -357,8 +299,7 @@
 }
 
 .carousel-empty-message {
-  color: #a89984;
-  /* Gruvbox Gray */
+  color: #a89984; /* Gruvbox Gray */
   font-style: italic;
   padding: 20px;
 }
@@ -366,8 +307,7 @@
 .export-status {
   margin-top: 10px;
   font-style: normal;
-  color: #d79921;
-  /* Gruvbox Yellow */
+  color: #d79921; /* Gruvbox Yellow */
   font-weight: bold;
 }
 
@@ -430,19 +370,16 @@
 }
 
 .carousel-thumbnail.active {
-  border-color: #d79921;
-  /* Gruvbox Yellow */
+  border-color: #d79921; /* Gruvbox Yellow */
   box-shadow: 0 0 10px #d79921;
 }
 
 .carousel-thumbnail.selected {
-  border-color: #458588;
-  /* Gruvbox Blue */
+  border-color: #458588; /* Gruvbox Blue */
 }
 
 .carousel-thumbnail.deleted {
-  border-color: #fb4934;
-  /* Gruvbox Red */
+  border-color: #fb4934; /* Gruvbox Red */
 }
 
 .carousel-thumbnail img {
@@ -464,7 +401,7 @@
 .comparison-container {
   display: flex;
   width: 100%;
-  height: 65vh;
+  height: 70vh;
   gap: 10px;
   align-items: center;
   justify-content: center;
@@ -473,35 +410,30 @@
 .comparison-container .photo-container {
   width: 50%;
   height: 100%;
-  max-height: 65vh;
+  max-height: 70vh;
 }
 
 .status-pinned {
-  color: #fb4934;
-  /* Gruvbox Red */
+  color: #fb4934; /* Gruvbox Red */
   font-weight: bold;
 }
 
 /* Added for saved status */
 .photo-display.saved {
-  border-color: #98971a;
-  /* Gruvbox Green */
+  border-color: #98971a; /* Gruvbox Green */
 }
 
 .status-saved {
-  color: #98971a;
-  /* Gruvbox Green */
+  color: #98971a; /* Gruvbox Green */
 }
 
 .select-toggle-button.saved {
-  background-color: #98971a;
-  /* Gruvbox Green */
-  color: #282828;
-  border-color: #98971a;
-  font-weight: bold;
+    background-color: #98971a; /* Gruvbox Green */
+    color: #282828;
+    border-color: #98971a;
+    font-weight: bold;
 }
 
 .carousel-thumbnail.saved {
-  border-color: #98971a;
-  /* Gruvbox Green */
+  border-color: #98971a; /* Gruvbox Green */
 }
