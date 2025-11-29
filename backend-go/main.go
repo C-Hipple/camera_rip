@@ -757,6 +757,7 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Delete imported: found %d already imported files", len(importedFiles))
 
 	deletedCount := 0
+	deletedRawCount := 0
 	notFoundCount := 0
 	errorCount := 0
 
@@ -783,6 +784,22 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 				} else {
 					deletedCount++
 					log.Printf("Deleted imported file: %s", file.Name())
+
+					// If it's a JPG, also try to delete the associated RAW file
+					if isJpg {
+						ext := filepath.Ext(file.Name())
+						baseName := strings.TrimSuffix(file.Name(), ext)
+						rawFileName := baseName + ".CR3"
+						rawFilePath := filepath.Join(sourceDir, rawFileName)
+
+						if err := os.Remove(rawFilePath); err == nil {
+							deletedRawCount++
+							log.Printf("Deleted associated RAW file: %s", rawFileName)
+						} else if !os.IsNotExist(err) {
+							// Log error if it exists but couldn't be deleted
+							log.Printf("Failed to delete associated RAW file %s: %v", rawFilePath, err)
+						}
+					}
 				}
 			}
 		}
@@ -790,11 +807,12 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":      "Delete operation complete",
-		"deleted":      deletedCount,
-		"not_found":    notFoundCount,
-		"errors":       errorCount,
-		"total_found":  deletedCount + notFoundCount + errorCount,
+		"message":       "Delete operation complete",
+		"deleted":       deletedCount,
+		"deleted_raw":   deletedRawCount,
+		"not_found":     notFoundCount,
+		"errors":        errorCount,
+		"total_found":   deletedCount + deletedRawCount + notFoundCount + errorCount,
 	})
 }
 

@@ -278,7 +278,7 @@ function App() {
             });
             const data = await response.json();
             if (response.ok) {
-                const message = `Deleted ${data.deleted} imported files from USB${data.errors > 0 ? ` (${data.errors} errors)` : ''}`;
+                const message = `Deleted ${data.deleted} imported files${data.deleted_raw ? ` and ${data.deleted_raw} RAW files` : ''} from USB${data.errors > 0 ? ` (${data.errors} errors)` : ''}`;
                 toast.update(toastId, { render: message, type: "success", isLoading: false, autoClose: 5000 });
             } else {
                 toast.update(toastId, { render: data.error || 'An unknown error occurred.', type: "error", isLoading: false, autoClose: 5000 });
@@ -369,7 +369,7 @@ function App() {
             // Current photo not in filtered list, go to first photo
             setCurrentIndex(0);
         }
-    }, [carouselFilter]); // Only run when filter changes
+    }, [carouselFilter, filteredPhotos]); // Run when filter or filtered photos change
 
     // Ensure currentIndex is valid when filteredPhotos changes (e.g., when selections change)
     useEffect(() => {
