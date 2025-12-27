@@ -117,15 +117,15 @@ The frontend is embedded directly into the Go binary using Go's `embed` package.
 ```
 ~/Pictures/photos/
 └── 2025-11-01_14-30-45/          # Import session
-    ├── IMG_0001.JPG              # Imported JPEGs
-    ├── IMG_0002.JPG
-    ├── IMG_0003.JPG
+    ├── 100_IMG_0001.JPG          # JPEGs prefixed with source folder number (e.g., 100_)
+    ├── 100_IMG_0002.JPG
+    ├── 101_IMG_0001.JPG          # Prevents collisions from multiple SD card folders
     └── selected/                 # Selected photos
-        ├── IMG_0001.JPG          # Selected JPEGs
-        ├── IMG_0003.JPG
+        ├── 100_IMG_0001.JPG      # Selected JPEGs
+        ├── 101_IMG_0001.JPG
         └── raw/                  # Raw files
-            ├── IMG_0001.CR3      # Corresponding raw files
-            └── IMG_0003.CR3
+            ├── 100_IMG_0001.CR3  # Corresponding raw files (also prefixed)
+            └── 101_IMG_0001.CR3
 ```
 
 ## Development
@@ -163,8 +163,18 @@ The CI runs on every push to `main`/`master` branches and on all pull requests.
 
 ## Camera Compatibility
 
-Currently configured for Canon cameras that store photos in `DCIM/100CANON`. The app looks for:
+Currently configured for Canon cameras that store photos in subdirectories like `DCIM/100CANON` and `DCIM/101CANON`. 
+
+### Filename Collision Prevention
+To prevent collisions when multiple folders have files with the same name (e.g., `IMG_0001.JPG` in both `100CANON` and `101CANON`), the app automatically prefixes filenames with the numeric part of their source directory (e.g., `100_IMG_0001.JPG`).
+
+The app looks for:
 - **JPEGs**: `.jpg` and `.jpeg` files
 - **Raw files**: `.CR3` files (Canon raw format)
 
-To support other camera brands/models, modify the `findUSBMountPoint()` function in `backend-go/main.go` to look for your camera's directory structure.
+### Customizing for Other Manufacturers
+To support other camera brands (e.g., Sony, Nikon, Fuji), you may need to modify the following in `backend-go/main.go`:
+1.  **`findUSBMountPoint()`**: Updates the directory detection logic.
+2.  **`getCanonPrefix()`**: This function extracts the prefix (like `100`) from the source directory name. If your camera uses a different folder naming convention (e.g., `100MSDCF`), update this logic to extract your desired prefix.
+3.  **`splitPrefixedFilename()`**: Update this to match your prefix format if you change how filenames are stored on disk.
+4.  **`importFromUSBHandler`**: Update the list of supported extensions (e.g., `.ARW`, `.NEF`, `.RAF`).

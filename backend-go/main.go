@@ -395,8 +395,14 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			canonPrefix := getCanonPrefix(fileEntry.dir)
+			destFilename := file.Name()
+			if canonPrefix != "" {
+				destFilename = canonPrefix + "_" + file.Name()
+			}
+
 			// Check if file has already been imported to any directory (O(1) lookup)
-			if data.SkipDuplicates && importedFiles[file.Name()] {
+			if data.SkipDuplicates && importedFiles[destFilename] {
 				skippedDuplicates++
 				continue
 			}
@@ -411,7 +417,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 				destinationDirCreated = true
 			}
 
-			destinationFile := filepath.Join(destinationDir, file.Name())
+			destinationFile := filepath.Join(destinationDir, destFilename)
 			if _, err := os.Stat(destinationFile); err == nil {
 				continue // Skip if file already exists in current destination
 			}
@@ -437,7 +443,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 			copiedCount++
 			// Only add image files to copiedFiles for thumbnail generation
 			if isJpg {
-				copiedFiles = append(copiedFiles, file.Name())
+				copiedFiles = append(copiedFiles, destFilename)
 			}
 		}
 	}
@@ -556,25 +562,50 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 	notFoundCount := 0
 
 	for _, jpegFile := range jpegFiles {
-		// Get the base filename without extension
 		ext := filepath.Ext(jpegFile)
 		baseName := strings.TrimSuffix(jpegFile, ext)
-		rawFileName := baseName + ".CR3"
 
-		// Look for raw file on SD card in both directories
+		prefix, originalBaseName := splitPrefixedFilename(baseName)
+		rawFileName := originalBaseName + ".CR3"
+
+		// Look for raw file on SD card
 		var rawSourcePath string
 		var found bool
-		for _, canonDir := range canonDirs {
-			sdCardDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
-			checkPath := filepath.Join(sdCardDir, rawFileName)
+
+		if prefix != "" {
+			// If we have a prefix, try that directory first
+			targetDir := prefix + "CANON"
+			// Check if this case-specific directory exists (try uppercase CANON first as it's standard)
+			checkPath := filepath.Join(usbMountPoint, "DCIM", targetDir, rawFileName)
 			if _, err := os.Stat(checkPath); err == nil {
 				rawSourcePath = checkPath
 				found = true
-				break
+			} else {
+				// Try lowercase canon
+				targetDirLow := prefix + "canon"
+				checkPath = filepath.Join(usbMountPoint, "DCIM", targetDirLow, rawFileName)
+				if _, err := os.Stat(checkPath); err == nil {
+					rawSourcePath = checkPath
+					found = true
+				}
 			}
 		}
 
-		rawDestPath := filepath.Join(rawDestDir, rawFileName)
+		// Fallback or if no prefix: look in all directories
+		if !found {
+			for _, canonDir := range canonDirs {
+				sdCardDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+				checkPath := filepath.Join(sdCardDir, rawFileName)
+				if _, err := os.Stat(checkPath); err == nil {
+					rawSourcePath = checkPath
+					found = true
+					break
+				}
+			}
+		}
+
+		rawDestFileName := baseName + ".CR3"
+		rawDestPath := filepath.Join(rawDestDir, rawDestFileName)
 
 		// Check if raw file already exists at destination
 		if _, err := os.Stat(rawDestPath); err == nil {
@@ -645,7 +676,6 @@ func exportRawSingleFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sdCardDir := filepath.Join(usbMountPoint, "DCIM", "100CANON")
 	sourceDir := filepath.Join(photoBaseDir, data.Directory)
 	selectedDir := filepath.Join(sourceDir, "selected")
 	rawDestDir := filepath.Join(selectedDir, "raw")
@@ -659,11 +689,50 @@ func exportRawSingleFileHandler(w http.ResponseWriter, r *http.Request) {
 	// Get the base filename without extension
 	ext := filepath.Ext(data.Filename)
 	baseName := strings.TrimSuffix(data.Filename, ext)
-	rawFileName := baseName + ".CR3"
+
+	prefix, originalBaseName := splitPrefixedFilename(baseName)
+	rawFileName := originalBaseName + ".CR3"
 
 	// Look for raw file on SD card
-	rawSourcePath := filepath.Join(sdCardDir, rawFileName)
-	rawDestPath := filepath.Join(rawDestDir, rawFileName)
+	var rawSourcePath string
+	found := false
+	if prefix != "" {
+		targetDir := prefix + "CANON"
+		checkPath := filepath.Join(usbMountPoint, "DCIM", targetDir, rawFileName)
+		if _, err := os.Stat(checkPath); err == nil {
+			rawSourcePath = checkPath
+			found = true
+		} else {
+			targetDirLow := prefix + "canon"
+			checkPath = filepath.Join(usbMountPoint, "DCIM", targetDirLow, rawFileName)
+			if _, err := os.Stat(checkPath); err == nil {
+				rawSourcePath = checkPath
+				found = true
+			}
+		}
+	}
+
+	if !found {
+		// Fallback to searching all directories
+		canonDirs := findCanonDirectories(usbMountPoint)
+		for _, canonDir := range canonDirs {
+			sdCardDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+			checkPath := filepath.Join(sdCardDir, rawFileName)
+			if _, err := os.Stat(checkPath); err == nil {
+				rawSourcePath = checkPath
+				found = true
+				break
+			}
+		}
+	}
+
+	if !found {
+		http.Error(w, "Raw file not found on SD card", http.StatusNotFound)
+		return
+	}
+
+	rawDestFileName := baseName + ".CR3"
+	rawDestPath := filepath.Join(rawDestDir, rawDestFileName)
 
 	// Check if raw file already exists at destination
 	if _, err := os.Stat(rawDestPath); err == nil {
@@ -818,37 +887,37 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
+				canonPrefix := getCanonPrefix(canonDir)
+				destFilename := file.Name()
+				if canonPrefix != "" {
+					destFilename = canonPrefix + "_" + file.Name()
+				}
+
 				// Only delete files that are in the imported set
-				if importedFiles[file.Name()] {
+				if importedFiles[destFilename] {
 					filePath := filepath.Join(sourceDir, file.Name())
-					if err := os.Remove(filePath); err != nil {
+					if err := os.Remove(filePath); err == nil {
+						deletedCount++
+						log.Printf("Deleted imported file: %s", file.Name())
+
+						// If it's a JPG, also try to delete the associated RAW file
+						if isJpg {
+							ext := filepath.Ext(file.Name())
+							baseName := strings.TrimSuffix(file.Name(), ext)
+							rawFileName := baseName + ".CR3"
+							rawFilePath := filepath.Join(sourceDir, rawFileName)
+
+							if err := os.Remove(rawFilePath); err == nil {
+								deletedRawCount++
+								log.Printf("Deleted associated RAW file: %s", rawFileName)
+							}
+						}
+					} else {
 						if os.IsNotExist(err) {
 							notFoundCount++
 						} else {
 							log.Printf("Failed to delete file %s: %v", filePath, err)
 							errorCount++
-						}
-					} else {
-						deletedCount++
-						log.Printf("Deleted imported file: %s", file.Name())
-					}
-				} else {
-					deletedCount++
-					log.Printf("Deleted imported file: %s", file.Name())
-
-					// If it's a JPG, also try to delete the associated RAW file
-					if isJpg {
-						ext := filepath.Ext(file.Name())
-						baseName := strings.TrimSuffix(file.Name(), ext)
-						rawFileName := baseName + ".CR3"
-						rawFilePath := filepath.Join(sourceDir, rawFileName)
-
-						if err := os.Remove(rawFilePath); err == nil {
-							deletedRawCount++
-							log.Printf("Deleted associated RAW file: %s", rawFileName)
-						} else if !os.IsNotExist(err) {
-							// Log error if it exists but couldn't be deleted
-							log.Printf("Failed to delete associated RAW file %s: %v", rawFilePath, err)
 						}
 					}
 				}
@@ -1116,4 +1185,24 @@ func serveThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.ServeFile(w, r, thumbnailPath)
+}
+
+func getCanonPrefix(dir string) string {
+	if len(dir) >= 3 {
+		prefix := dir[:3]
+		if _, err := strconv.Atoi(prefix); err == nil {
+			return prefix
+		}
+	}
+	return ""
+}
+
+func splitPrefixedFilename(filename string) (prefix string, originalName string) {
+	if len(filename) > 4 && filename[3] == '_' {
+		p := filename[:3]
+		if _, err := strconv.Atoi(p); err == nil {
+			return p, filename[4:]
+		}
+	}
+	return "", filename
 }
