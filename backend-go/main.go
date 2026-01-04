@@ -1029,7 +1029,7 @@ func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
 // findCanonDirectories returns all existing CANON directories (100CANON and/or 101CANON)
 func findCanonDirectories(mountPoint string) []string {
 	var canonDirs []string
-	checkDirs := []string{"100CANON", "101CANON"}
+	checkDirs := []string{"100CANON", "101CANON", "100EOSR6"}
 	for _, canonDir := range checkDirs {
 		checkPath := filepath.Join(mountPoint, "DCIM", canonDir)
 		if _, err := os.Stat(checkPath); err == nil {
