@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/nfnt/resize"
+	"regexp"
 )
 
 //go:embed all:frontend/build
@@ -1029,12 +1030,16 @@ func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
 // findCanonDirectories returns all existing CANON directories (100CANON and/or 101CANON)
 func findCanonDirectories(mountPoint string) []string {
 	var canonDirs []string
-	// TODO: generaliaze to regex to get the 100, 101, etc
-	checkDirs := []string{"100CANON", "101CANON", "100EOSR6"}
-	for _, canonDir := range checkDirs {
-		checkPath := filepath.Join(mountPoint, "DCIM", canonDir)
-		if _, err := os.Stat(checkPath); err == nil {
-			canonDirs = append(canonDirs, canonDir)
+	dcimPath := filepath.Join(mountPoint, "DCIM")
+	files, err := ioutil.ReadDir(dcimPath)
+	if err != nil {
+		return canonDirs
+	}
+
+	re := regexp.MustCompile(`^[0-9]{3}`)
+	for _, file := range files {
+		if file.IsDir() && re.MatchString(file.Name()) {
+			canonDirs = append(canonDirs, file.Name())
 		}
 	}
 	return canonDirs

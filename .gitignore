@@ -6,6 +6,8 @@ backend-go/frontend/
 backend-go/camera-rip
 backend-go/backend
 
+*.exe
+
 # Node modules
 frontend/node_modules/
 

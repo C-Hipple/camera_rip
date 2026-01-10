@@ -28,6 +28,7 @@ function App() {
     const [showDeletePhotosModal, setShowDeletePhotosModal] = useState(false);
     const [isDeletingPhotos, setIsDeletingPhotos] = useState(false);
     const [carouselFilter, setCarouselFilter] = useState('all');
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
     const currentPhotoNameRef = useRef(null);
 
     const fetchDirectories = useCallback(() => {
@@ -46,7 +47,7 @@ function App() {
 
     const fetchExportStatus = useCallback(() => {
         if (!currentDirectory) return;
-        fetch(`${API_URL}/api/export-status?directory=${currentDirectory}`)
+        fetch(`${API_URL}/api/export-status?directory=${encodeURIComponent(currentDirectory)}`)
             .then(res => res.json())
             .then(data => {
                 if (data && !data.error) {
@@ -72,7 +73,7 @@ function App() {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ 
+                body: JSON.stringify({
                     since: sinceDate,
                     skip_duplicates: skipDuplicates,
                     target_directory: addToCurrentBatch ? currentDirectory : '',
@@ -101,7 +102,7 @@ function App() {
     useEffect(() => {
         if (!currentDirectory) return;
         setPinnedPhoto(null); // Reset pinned photo when directory changes
-        fetch(`${API_URL}/api/photos?directory=${currentDirectory}`)
+        fetch(`${API_URL}/api/photos?directory=${encodeURIComponent(currentDirectory)}`)
             .then(res => res.json())
             .then(data => {
                 if (data.error) {
@@ -113,8 +114,8 @@ function App() {
                 }
             })
             .catch(err => toast.error("Error fetching photos."));
-        
-        fetch(`${API_URL}/api/selected-photos?directory=${currentDirectory}`)
+
+        fetch(`${API_URL}/api/selected-photos?directory=${encodeURIComponent(currentDirectory)}`)
             .then(res => res.json())
             .then(data => {
                 if (data.error) {
@@ -191,21 +192,21 @@ function App() {
                 selected_files: allFilesToSave,
             }),
         })
-        .then(res => res.json())
-        .then(data => {
-            if (data.error) {
-                toast.update(toastId, { render: data.error, type: "error", isLoading: false, autoClose: 5000 });
-            } else {
-                toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
-                // Move selected to saved and clear selected
-                setSavedPhotos(new Set(allFilesToSave));
-                setSelectedPhotos(new Set());
-                fetchExportStatus(); // Update export status after save
-            }
-        })
-        .catch(err => {
-            toast.update(toastId, { render: "An error occurred while saving.", type: "error", isLoading: false, autoClose: 5000 });
-        });
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    toast.update(toastId, { render: data.error, type: "error", isLoading: false, autoClose: 5000 });
+                } else {
+                    toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
+                    // Move selected to saved and clear selected
+                    setSavedPhotos(new Set(allFilesToSave));
+                    setSelectedPhotos(new Set());
+                    fetchExportStatus(); // Update export status after save
+                }
+            })
+            .catch(err => {
+                toast.update(toastId, { render: "An error occurred while saving.", type: "error", isLoading: false, autoClose: 5000 });
+            });
     };
 
     const handleExportRaw = async () => {
@@ -278,7 +279,7 @@ function App() {
                 const message = `Deleted ${data.deleted} photos from hard drive${data.errors > 0 ? ` (${data.errors} errors)` : ''}`;
                 toast.update(toastId, { render: message, type: "success", isLoading: false, autoClose: 5000 });
                 // Refresh photos list
-                fetch(`${API_URL}/api/photos?directory=${currentDirectory}`)
+                fetch(`${API_URL}/api/photos?directory=${encodeURIComponent(currentDirectory)}`)
                     .then(res => res.json())
                     .then(data => {
                         if (data.error) {
@@ -396,8 +397,8 @@ function App() {
         };
     }, [currentIndex, filteredPhotos, handleSelection, handleDeletion, navigate, pinnedPhoto, deletedPhotos]);
 
-    const currentPhotoName = filteredPhotos.length > 0 && currentIndex < filteredPhotos.length 
-        ? filteredPhotos[currentIndex] 
+    const currentPhotoName = filteredPhotos.length > 0 && currentIndex < filteredPhotos.length
+        ? filteredPhotos[currentIndex]
         : null;
     const isSelected = currentPhotoName ? selectedPhotos.has(currentPhotoName) : false;
     const isSaved = currentPhotoName ? savedPhotos.has(currentPhotoName) : false;
@@ -430,7 +431,14 @@ function App() {
                 confirmButtonClass="delete-confirm"
             />
 
-            <div className="bottom-left-controls">
+            <div className={`bottom-left-controls ${isSidebarCollapsed ? 'collapsed' : ''}`}>
+                <button
+                    className="sidebar-toggle"
+                    onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                    title={isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+                >
+                    {isSidebarCollapsed ? '→' : '←'}
+                </button>
                 <div className="sidebar-controls">
                     {filteredPhotos.length > 0 && currentPhotoName && (
                         <div className="photo-info-sidebar">
@@ -499,9 +507,9 @@ function App() {
                             ))}
                         </select>
                     )}
-                    <button 
-                        onClick={() => setShowDeleteModal(true)} 
-                        disabled={isDeleting} 
+                    <button
+                        onClick={() => setShowDeleteModal(true)}
+                        disabled={isDeleting}
                         className="delete-button"
                     >
                         {isDeleting ? 'Deleting...' : 'Delete Already Imported from SD Card'}
@@ -518,48 +526,48 @@ function App() {
                             <div className="main-photo-area">
                                 {pinnedPhoto ? (
                                     <div className="comparison-container">
-                                                                         <PhotoViewer
-                                                                            photoName={pinnedPhoto}
-                                                                            directory={currentDirectory}
-                                                                            isSelected={isPinnedSelected}
-                                                                            isSaved={isPinnedSaved}
-                                                                            isDeleted={isPinnedDeleted}
-                                                                        >
-                                                                            <p>{pinnedPhoto}</p>
-                                                                            <p className={`status ${isPinnedSaved ? 'status-saved' : (isPinnedSelected ? 'status-selected' : (isPinnedDeleted ? 'status-deleted' : ''))}`}>
-                                                                                {isPinnedSaved ? 'SAVED' : (isPinnedSelected ? 'SELECTED' : (isPinnedDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
-                                                                            </p>
-                                                                            <p className="status status-pinned">PINNED</p>
-                                                                        </PhotoViewer>
-                                                                        <PhotoViewer
-                                                                            photoName={currentPhotoName}
-                                                                            directory={currentDirectory}
-                                                                            isSelected={isSelected}
-                                                                            isSaved={isSaved}
-                                                                            isDeleted={isDeleted}
-                                                                        />
-                                                                    </div>
-                                                                ) : (
-                                                                    <PhotoViewer
-                                                                        photoName={currentPhotoName}
-                                                                        directory={currentDirectory}
-                                                                        isSelected={isSelected}
-                                                                        isSaved={isSaved}
-                                                                        isDeleted={isDeleted}
-                                                                    />                            )}
+                                        <PhotoViewer
+                                            photoName={pinnedPhoto}
+                                            directory={currentDirectory}
+                                            isSelected={isPinnedSelected}
+                                            isSaved={isPinnedSaved}
+                                            isDeleted={isPinnedDeleted}
+                                        >
+                                            <p>{pinnedPhoto}</p>
+                                            <p className={`status ${isPinnedSaved ? 'status-saved' : (isPinnedSelected ? 'status-selected' : (isPinnedDeleted ? 'status-deleted' : ''))}`}>
+                                                {isPinnedSaved ? 'SAVED' : (isPinnedSelected ? 'SELECTED' : (isPinnedDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
+                                            </p>
+                                            <p className="status status-pinned">PINNED</p>
+                                        </PhotoViewer>
+                                        <PhotoViewer
+                                            photoName={currentPhotoName}
+                                            directory={currentDirectory}
+                                            isSelected={isSelected}
+                                            isSaved={isSaved}
+                                            isDeleted={isDeleted}
+                                        />
+                                    </div>
+                                ) : (
+                                    <PhotoViewer
+                                        photoName={currentPhotoName}
+                                        directory={currentDirectory}
+                                        isSelected={isSelected}
+                                        isSaved={isSaved}
+                                        isDeleted={isDeleted}
+                                    />)}
                             </div>
                         ) : (
                             <div className="main-photo-area">
                                 <div className="empty-filter-message">
                                     <h2>
-                                        {carouselFilter === 'selected' ? 'No Selected Photos' : 
-                                         carouselFilter === 'deleted' ? 'No Photos Marked for Deletion' : 
-                                         'No Photos'}
+                                        {carouselFilter === 'selected' ? 'No Selected Photos' :
+                                            carouselFilter === 'deleted' ? 'No Photos Marked for Deletion' :
+                                                'No Photos'}
                                     </h2>
                                     <p>
                                         {carouselFilter === 'selected' ? 'Switch to "All Images" or select some photos to view them here.' :
-                                         carouselFilter === 'deleted' ? 'Switch to "All Images" or mark some photos for deletion to view them here.' :
-                                         'No photos available.'}
+                                            carouselFilter === 'deleted' ? 'Switch to "All Images" or mark some photos for deletion to view them here.' :
+                                                'No photos available.'}
                                     </p>
                                 </div>
                             </div>
@@ -619,16 +627,16 @@ function App() {
                     <button onClick={handleSave} disabled={selectedPhotos.size === 0} className="save-button">
                         Save {selectedPhotos.size} new selections
                     </button>
-                    <button 
-                        onClick={handleExportRaw} 
-                        disabled={exportStatus.selected_count === 0 || isExportingRaw} 
+                    <button
+                        onClick={handleExportRaw}
+                        disabled={exportStatus.selected_count === 0 || isExportingRaw}
                         className="export-raw-button">
                         {isExportingRaw ? 'Exporting...' : `Export Raw Files (${exportStatus.missing_count} missing)`}
                     </button>
                     {carouselFilter === 'deleted' && deletedPhotos.size > 0 && (
-                        <button 
-                            onClick={() => setShowDeletePhotosModal(true)} 
-                            disabled={isDeletingPhotos} 
+                        <button
+                            onClick={() => setShowDeletePhotosModal(true)}
+                            disabled={isDeletingPhotos}
                             className="delete-photos-button">
                             {isDeletingPhotos ? 'Deleting...' : `Delete ${deletedPhotos.size} Photo(s) from Hard Drive`}
                         </button>
@@ -682,7 +690,7 @@ function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, sel
                         onClick={() => setCurrentIndex(photoIndex)}
                     >
                         <img
-                            src={`${API_URL}/thumbnail/${currentDirectory}/${photoName}`}
+                            src={`${API_URL}/thumbnail/${encodeURIComponent(currentDirectory)}/${encodeURIComponent(photoName)}`}
                             alt={`thumbnail-${photoName}`}
                         />
                     </div>
