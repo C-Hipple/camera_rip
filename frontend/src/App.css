@@ -395,17 +395,45 @@
 
 /* --- Carousel Wrapper --- */
 .carousel-wrapper {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: center;
   margin-top: 20px;
-  gap: 15px;
+  gap: 20px;
+  width: 100%;
+  padding: 0 40px;
+  box-sizing: border-box;
 }
 
 /* --- Carousel Filter --- */
 .carousel-filter-container {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  /* Align filter to the right of its column (towards center) */
+}
+
+/* --- Carousel Filename --- */
+.carousel-filename-container {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  /* Align filename to the left of its column (away from center) */
+  overflow: hidden;
+}
+
+.carousel-filename {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.85rem;
+  color: #ebdbb2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background-color: #3c3836;
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid #504945;
+  max-width: 100%;
 }
 
 .carousel-filter-select {
@@ -433,8 +461,8 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  margin-top: 10px;
   gap: 10px;
+  /* Removed margin-top to align with siblings in flex wrapper */
 }
 
 .carousel-thumbnail {

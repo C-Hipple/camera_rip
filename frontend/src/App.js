@@ -443,7 +443,6 @@ function App() {
                     {filteredPhotos.length > 0 && currentPhotoName && (
                         <div className="photo-info-sidebar">
                             <p>{currentIndex + 1} / {filteredPhotos.length}</p>
-                            <p>{currentPhotoName}</p>
                             <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : (isDeleted ? 'status-deleted' : ''))}`}>
                                 {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : (isDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
                             </p>
@@ -597,6 +596,11 @@ function App() {
                             ) : (
                                 <div className="carousel-container">
                                     <p className="carousel-empty-message">No photos to display</p>
+                                </div>
+                            )}
+                            {currentPhotoName && (
+                                <div className="carousel-filename-container">
+                                    <span className="carousel-filename">{currentPhotoName}</span>
                                 </div>
                             )}
                         </div>
