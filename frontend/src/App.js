@@ -30,6 +30,8 @@ function App() {
     const [carouselFilter, setCarouselFilter] = useState('all');
     const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
     const currentPhotoNameRef = useRef(null);
+    const [importPreview, setImportPreview] = useState(null);
+    const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
     const fetchDirectories = useCallback(() => {
         fetch(`${API_URL}/api/directories`)
@@ -63,6 +65,37 @@ function App() {
     useEffect(() => {
         fetchDirectories();
     }, [fetchDirectories]);
+
+    const fetchImportPreview = useCallback(async () => {
+        setIsLoadingPreview(true);
+        try {
+            const response = await fetch(`${API_URL}/api/import-preview`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    since: sinceDate,
+                    skip_duplicates: skipDuplicates,
+                    target_directory: addToCurrentBatch ? currentDirectory : '',
+                    import_videos: importVideos
+                })
+            });
+            const data = await response.json();
+            if (response.ok) {
+                setImportPreview(data);
+            } else {
+                setImportPreview(null);
+            }
+        } catch (err) {
+            setImportPreview(null);
+        }
+        setIsLoadingPreview(false);
+    }, [sinceDate, skipDuplicates, addToCurrentBatch, currentDirectory, importVideos]);
+
+    useEffect(() => {
+        fetchImportPreview();
+    }, [fetchImportPreview]);
 
     const handleImport = async () => {
         setIsImporting(true);
@@ -312,6 +345,17 @@ function App() {
         return photos;
     }, [photos, carouselFilter, selectedPhotos, savedPhotos, deletedPhotos]);
 
+    // Calculate counts for each filter option
+    const filterCounts = React.useMemo(() => {
+        const selectedCount = photos.filter(photo => selectedPhotos.has(photo) || savedPhotos.has(photo)).length;
+        const deletedCount = photos.filter(photo => deletedPhotos.has(photo)).length;
+        return {
+            all: photos.length,
+            selected: selectedCount,
+            deleted: deletedCount
+        };
+    }, [photos, selectedPhotos, savedPhotos, deletedPhotos]);
+
     // Track current photo name
     useEffect(() => {
         if (filteredPhotos.length > 0 && currentIndex < filteredPhotos.length) {
@@ -492,6 +536,52 @@ function App() {
                             <span>Import videos (.MP4)</span>
                         </label>
                     </div>
+
+                    {/* Import Preview */}
+                    {isLoadingPreview ? (
+                        <div className="import-preview loading">
+                            <p>Loading preview...</p>
+                        </div>
+                    ) : importPreview && importPreview.usb_connected ? (
+                        <div className="import-preview">
+                            {importPreview.error ? (
+                                <p className="preview-error">{importPreview.error}</p>
+                            ) : (
+                                <>
+                                    <div className="preview-stat main">
+                                        <span className="preview-label">Will import:</span>
+                                        <span className="preview-value">{importPreview.files_to_import} photos</span>
+                                    </div>
+                                    {importPreview.skipped_duplicates > 0 && (
+                                        <div className="preview-stat">
+                                            <span className="preview-label">Will skip (duplicates):</span>
+                                            <span className="preview-value">{importPreview.skipped_duplicates}</span>
+                                        </div>
+                                    )}
+                                    {importPreview.skipped_by_date > 0 && (
+                                        <div className="preview-stat">
+                                            <span className="preview-label">Will skip (date filter):</span>
+                                            <span className="preview-value">{importPreview.skipped_by_date}</span>
+                                        </div>
+                                    )}
+                                    {importPreview.skipped_videos > 0 && (
+                                        <div className="preview-stat">
+                                            <span className="preview-label">Will skip (videos):</span>
+                                            <span className="preview-value">{importPreview.skipped_videos}</span>
+                                        </div>
+                                    )}
+                                    <div className="preview-stat">
+                                        <span className="preview-label">Total on USB:</span>
+                                        <span className="preview-value">{importPreview.total_files}</span>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="import-preview error">
+                            <p>USB not detected</p>
+                        </div>
+                    )}
                 </div>
 
                 <div className="sidebar-controls">
@@ -523,6 +613,12 @@ function App() {
                     <>
                         {filteredPhotos.length > 0 ? (
                             <div className="main-photo-area">
+                                {currentPhotoName && (
+                                    <div className="photo-filename-overlay">
+                                        <div className="filename">{currentPhotoName}</div>
+                                        <div className="photo-position-overlay">{currentIndex + 1} / {filteredPhotos.length}</div>
+                                    </div>
+                                )}
                                 {pinnedPhoto ? (
                                     <div className="comparison-container">
                                         <PhotoViewer
@@ -553,7 +649,8 @@ function App() {
                                         isSelected={isSelected}
                                         isSaved={isSaved}
                                         isDeleted={isDeleted}
-                                    />)}
+                                    />
+                                )}
                             </div>
                         ) : (
                             <div className="main-photo-area">
@@ -578,9 +675,9 @@ function App() {
                                     onChange={e => setCarouselFilter(e.target.value)}
                                     className="carousel-filter-select"
                                 >
-                                    <option value="all">All Images</option>
-                                    <option value="selected">Selected Only</option>
-                                    <option value="deleted">Marked for Deletion</option>
+                                    <option value="all">All Images ({filterCounts.all})</option>
+                                    <option value="selected">Selected Only ({filterCounts.selected})</option>
+                                    <option value="deleted">Marked for Deletion ({filterCounts.deleted})</option>
                                 </select>
                             </div>
                             {filteredPhotos.length > 0 ? (

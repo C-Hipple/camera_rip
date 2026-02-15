@@ -67,6 +67,7 @@ func main() {
 	http.HandleFunc("/api/photos", corsHandler(getPhotosHandler))
 	http.HandleFunc("/api/save", corsHandler(saveSelectedPhotosHandler))
 	http.HandleFunc("/api/import", corsHandler(importFromUSBHandler))
+	http.HandleFunc("/api/import-preview", corsHandler(importPreviewHandler))
 	http.HandleFunc("/api/export-raw", corsHandler(exportRawFilesHandler))
 	http.HandleFunc("/api/export-raw-single", corsHandler(exportRawSingleFileHandler))
 	http.HandleFunc("/api/export-status", corsHandler(exportStatusHandler))
@@ -494,6 +495,163 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":       message,
 		"new_directory": newDirectory,
+	})
+}
+
+func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
+	var data struct {
+		Since           string `json:"since"`
+		SkipDuplicates  bool   `json:"skip_duplicates"`
+		TargetDirectory string `json:"target_directory"`
+		ImportVideos    bool   `json:"import_videos"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil && err != io.EOF {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var sinceDate time.Time
+	var err error
+	if data.Since != "" {
+		sinceDate, err = time.Parse("2006-01-02", data.Since)
+		if err != nil {
+			http.Error(w, "Invalid date format. Please use YYYY-MM-DD.", http.StatusBadRequest)
+			return
+		}
+	}
+
+	usbMountPoint := findUSBMountPoint()
+	if usbMountPoint == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"total_files":       0,
+			"files_to_import":   0,
+			"files_to_skip":     0,
+			"usb_connected":     false,
+			"error":             "USB device with DCIM/Canon directory not found",
+		})
+		return
+	}
+
+	canonDirs := findCanonDirectories(usbMountPoint)
+	if len(canonDirs) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"total_files":       0,
+			"files_to_import":   0,
+			"files_to_skip":     0,
+			"usb_connected":     true,
+			"error":             "Could not find Canon directories on USB device",
+		})
+		return
+	}
+
+	// Determine destination directory for duplicate checking
+	var destinationDir string
+	if data.TargetDirectory != "" {
+		destinationDir = filepath.Join(photoBaseDir, data.TargetDirectory)
+		// Verify target directory exists
+		if _, err := os.Stat(destinationDir); os.IsNotExist(err) {
+			http.Error(w, "Target directory does not exist", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Read files from all CANON directories
+	type fileWithDir struct {
+		file os.FileInfo
+		dir  string
+	}
+	var allFiles []fileWithDir
+	for _, canonDir := range canonDirs {
+		sourceDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+		files, err := ioutil.ReadDir(sourceDir)
+		if err != nil {
+			log.Printf("Failed to read directory %s: %v", sourceDir, err)
+			continue
+		}
+		for _, file := range files {
+			allFiles = append(allFiles, fileWithDir{file: file, dir: canonDir})
+		}
+	}
+
+	// Build set of already imported files once (if skip duplicates is enabled)
+	var importedFiles map[string]bool
+	if data.SkipDuplicates {
+		importedFiles = buildImportedFilesSet()
+	}
+
+	totalFiles := 0
+	filesToImport := 0
+	skippedDuplicates := 0
+	skippedByDate := 0
+	skippedVideos := 0
+
+	for _, fileEntry := range allFiles {
+		file := fileEntry.file
+		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
+			lowerName := strings.ToLower(file.Name())
+			isJpg := strings.HasSuffix(lowerName, ".jpg")
+			isMp4 := strings.HasSuffix(lowerName, ".mp4")
+
+			// Count all potential files
+			if isJpg || isMp4 {
+				totalFiles++
+			}
+
+			// Skip if not jpg and not importing videos
+			if !isJpg && (!isMp4 || !data.ImportVideos) {
+				if isMp4 {
+					skippedVideos++
+				}
+				continue
+			}
+
+			sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
+			sourceFile := filepath.Join(sourceDir, file.Name())
+
+			// Check date filter
+			if !sinceDate.IsZero() {
+				fileInfo, err := os.Stat(sourceFile)
+				if err == nil && fileInfo.ModTime().Before(sinceDate) {
+					skippedByDate++
+					continue
+				}
+			}
+
+			canonPrefix := getCanonPrefix(fileEntry.dir)
+			destFilename := file.Name()
+			if canonPrefix != "" {
+				destFilename = canonPrefix + "_" + file.Name()
+			}
+
+			// Check if already imported
+			if data.SkipDuplicates && importedFiles[destFilename] {
+				skippedDuplicates++
+				continue
+			}
+
+			// Check if file already exists in target destination
+			if destinationDir != "" {
+				destinationFile := filepath.Join(destinationDir, destFilename)
+				if _, err := os.Stat(destinationFile); err == nil {
+					skippedDuplicates++
+					continue
+				}
+			}
+
+			filesToImport++
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_files":       totalFiles,
+		"files_to_import":   filesToImport,
+		"skipped_duplicates": skippedDuplicates,
+		"skipped_by_date":   skippedByDate,
+		"skipped_videos":    skippedVideos,
+		"usb_connected":     true,
 	})
 }
 
