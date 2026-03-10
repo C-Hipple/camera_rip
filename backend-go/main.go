@@ -290,6 +290,7 @@ func buildImportedFilesSet() map[string]bool {
 func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	var data struct {
 		Since           string `json:"since"`
+		Until           string `json:"until"`
 		SkipDuplicates  bool   `json:"skip_duplicates"`
 		TargetDirectory string `json:"target_directory"`
 		ImportVideos    bool   `json:"import_videos"`
@@ -300,6 +301,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var sinceDate time.Time
+	var untilDate time.Time
 	var err error
 	if data.Since != "" {
 		sinceDate, err = time.Parse("2006-01-02", data.Since)
@@ -307,6 +309,15 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid date format. Please use YYYY-MM-DD.", http.StatusBadRequest)
 			return
 		}
+	}
+	if data.Until != "" {
+		untilDate, err = time.Parse("2006-01-02", data.Until)
+		if err != nil {
+			http.Error(w, "Invalid date format. Please use YYYY-MM-DD.", http.StatusBadRequest)
+			return
+		}
+		// Make until date inclusive by adding one day
+		untilDate = untilDate.AddDate(0, 0, 1)
 	}
 
 	usbMountPoint := findUSBMountPoint()
@@ -386,13 +397,17 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 			sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
 			sourceFile := filepath.Join(sourceDir, file.Name())
 
-			if !sinceDate.IsZero() {
+			if !sinceDate.IsZero() || !untilDate.IsZero() {
 				fileInfo, err := os.Stat(sourceFile)
 				if err != nil {
 					log.Printf("Failed to get file info: %v", err)
 					continue
 				}
-				if fileInfo.ModTime().Before(sinceDate) {
+				modTime := fileInfo.ModTime()
+				if !sinceDate.IsZero() && modTime.Before(sinceDate) {
+					continue
+				}
+				if !untilDate.IsZero() && !modTime.Before(untilDate) {
 					continue
 				}
 			}
@@ -453,8 +468,8 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	// Handle case where no files were copied
 	if copiedCount == 0 {
 		var message string
-		if !sinceDate.IsZero() {
-			message = "No new files found since " + data.Since
+		if !sinceDate.IsZero() || !untilDate.IsZero() {
+			message = "No new files found in the selected date range"
 		} else if skippedDuplicates > 0 {
 			message = "All " + strconv.Itoa(skippedDuplicates) + " files have already been imported."
 		} else {
@@ -501,6 +516,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 	var data struct {
 		Since           string `json:"since"`
+		Until           string `json:"until"`
 		SkipDuplicates  bool   `json:"skip_duplicates"`
 		TargetDirectory string `json:"target_directory"`
 		ImportVideos    bool   `json:"import_videos"`
@@ -511,6 +527,7 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var sinceDate time.Time
+	var untilDate time.Time
 	var err error
 	if data.Since != "" {
 		sinceDate, err = time.Parse("2006-01-02", data.Since)
@@ -519,16 +536,25 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if data.Until != "" {
+		untilDate, err = time.Parse("2006-01-02", data.Until)
+		if err != nil {
+			http.Error(w, "Invalid date format. Please use YYYY-MM-DD.", http.StatusBadRequest)
+			return
+		}
+		// Make until date inclusive by adding one day
+		untilDate = untilDate.AddDate(0, 0, 1)
+	}
 
 	usbMountPoint := findUSBMountPoint()
 	if usbMountPoint == "" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"total_files":       0,
-			"files_to_import":   0,
-			"files_to_skip":     0,
-			"usb_connected":     false,
-			"error":             "USB device with DCIM/Canon directory not found",
+			"total_files":     0,
+			"files_to_import": 0,
+			"files_to_skip":   0,
+			"usb_connected":   false,
+			"error":           "USB device with DCIM/Canon directory not found",
 		})
 		return
 	}
@@ -537,11 +563,11 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 	if len(canonDirs) == 0 {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"total_files":       0,
-			"files_to_import":   0,
-			"files_to_skip":     0,
-			"usb_connected":     true,
-			"error":             "Could not find Canon directories on USB device",
+			"total_files":     0,
+			"files_to_import": 0,
+			"files_to_skip":   0,
+			"usb_connected":   true,
+			"error":           "Could not find Canon directories on USB device",
 		})
 		return
 	}
@@ -586,6 +612,8 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 	skippedDuplicates := 0
 	skippedByDate := 0
 	skippedVideos := 0
+	// dailyBreakdown maps "YYYY-MM-DD" -> count of files that will be imported that day
+	dailyBreakdown := make(map[string]int)
 
 	for _, fileEntry := range allFiles {
 		file := fileEntry.file
@@ -610,12 +638,27 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 			sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
 			sourceFile := filepath.Join(sourceDir, file.Name())
 
-			// Check date filter
-			if !sinceDate.IsZero() {
+			// Check date filter (range)
+			var modTime time.Time
+			if !sinceDate.IsZero() || !untilDate.IsZero() {
 				fileInfo, err := os.Stat(sourceFile)
-				if err == nil && fileInfo.ModTime().Before(sinceDate) {
+				if err != nil {
 					skippedByDate++
 					continue
+				}
+				modTime = fileInfo.ModTime()
+				if !sinceDate.IsZero() && modTime.Before(sinceDate) {
+					skippedByDate++
+					continue
+				}
+				if !untilDate.IsZero() && !modTime.Before(untilDate) {
+					skippedByDate++
+					continue
+				}
+			} else {
+				// Still need modTime for daily breakdown
+				if fileInfo, err := os.Stat(sourceFile); err == nil {
+					modTime = fileInfo.ModTime()
 				}
 			}
 
@@ -641,17 +684,22 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			filesToImport++
+			if !modTime.IsZero() {
+				dateKey := modTime.Format("2006-01-02")
+				dailyBreakdown[dateKey]++
+			}
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"total_files":       totalFiles,
-		"files_to_import":   filesToImport,
+		"total_files":        totalFiles,
+		"files_to_import":    filesToImport,
 		"skipped_duplicates": skippedDuplicates,
-		"skipped_by_date":   skippedByDate,
-		"skipped_videos":    skippedVideos,
-		"usb_connected":     true,
+		"skipped_by_date":    skippedByDate,
+		"skipped_videos":     skippedVideos,
+		"usb_connected":      true,
+		"daily_breakdown":    dailyBreakdown,
 	})
 }
 
