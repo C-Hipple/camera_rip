@@ -9,7 +9,7 @@ test('renders photo selector app', () => {
 
 test('renders import button', () => {
   render(<App />);
-  const importButton = screen.getByRole('button', { name: /Import/i });
+  const importButton = screen.getByRole('button', { name: /^Import$/i });
   expect(importButton).toBeInTheDocument();
   expect(importButton).not.toBeDisabled();
 });
