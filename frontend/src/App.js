@@ -17,6 +17,7 @@ function App() {
     const [deletedPhotos, setDeletedPhotos] = useState(new Set());
     const [isImporting, setIsImporting] = useState(false);
     const [sinceDate, setSinceDate] = useState('');
+    const [untilDate, setUntilDate] = useState('');
     const [skipDuplicates, setSkipDuplicates] = useState(true);
     const [addToCurrentBatch, setAddToCurrentBatch] = useState(false);
     const [importVideos, setImportVideos] = useState(false);
@@ -76,6 +77,7 @@ function App() {
                 },
                 body: JSON.stringify({
                     since: sinceDate,
+                    until: untilDate,
                     skip_duplicates: skipDuplicates,
                     target_directory: addToCurrentBatch ? currentDirectory : '',
                     import_videos: importVideos
@@ -91,7 +93,7 @@ function App() {
             setImportPreview(null);
         }
         setIsLoadingPreview(false);
-    }, [sinceDate, skipDuplicates, addToCurrentBatch, currentDirectory, importVideos]);
+    }, [sinceDate, untilDate, skipDuplicates, addToCurrentBatch, currentDirectory, importVideos]);
 
     useEffect(() => {
         fetchImportPreview();
@@ -108,6 +110,7 @@ function App() {
                 },
                 body: JSON.stringify({
                     since: sinceDate,
+                    until: untilDate,
                     skip_duplicates: skipDuplicates,
                     target_directory: addToCurrentBatch ? currentDirectory : '',
                     import_videos: importVideos
@@ -495,15 +498,29 @@ function App() {
                     <button onClick={handleImport} disabled={isImporting} className="import-button">
                         {isImporting ? 'Importing...' : 'Import'}
                     </button>
-                    <div className="date-picker-container">
-                        <label htmlFor="since-date">Since:</label>
-                        <input
-                            type="date"
-                            id="since-date"
-                            value={sinceDate}
-                            onChange={e => setSinceDate(e.target.value)}
-                            className="date-picker"
-                        />
+                    <div className="date-range-container">
+                        <div className="date-picker-container">
+                            <label htmlFor="since-date">From:</label>
+                            <input
+                                type="date"
+                                id="since-date"
+                                value={sinceDate}
+                                onChange={e => setSinceDate(e.target.value)}
+                                className="date-picker"
+                                max={untilDate || undefined}
+                            />
+                        </div>
+                        <div className="date-picker-container">
+                            <label htmlFor="until-date">To:</label>
+                            <input
+                                type="date"
+                                id="until-date"
+                                value={untilDate}
+                                onChange={e => setUntilDate(e.target.value)}
+                                className="date-picker"
+                                min={sinceDate || undefined}
+                            />
+                        </div>
                     </div>
                     <div className="checkbox-container">
                         <label>
@@ -552,6 +569,18 @@ function App() {
                                         <span className="preview-label">Will import:</span>
                                         <span className="preview-value">{importPreview.files_to_import} photos</span>
                                     </div>
+                                    {importPreview.daily_breakdown && Object.keys(importPreview.daily_breakdown).length > 0 && (
+                                        <div className="daily-breakdown">
+                                            {Object.entries(importPreview.daily_breakdown)
+                                                .sort(([a], [b]) => a.localeCompare(b))
+                                                .map(([date, count]) => (
+                                                    <div key={date} className="preview-stat daily">
+                                                        <span className="preview-label">{date}:</span>
+                                                        <span className="preview-value">{count} photos</span>
+                                                    </div>
+                                                ))}
+                                        </div>
+                                    )}
                                     {importPreview.skipped_duplicates > 0 && (
                                         <div className="preview-stat">
                                             <span className="preview-label">Will skip (duplicates):</span>
