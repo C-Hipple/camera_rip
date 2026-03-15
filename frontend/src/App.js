@@ -30,6 +30,7 @@ function App() {
     const [isDeletingPhotos, setIsDeletingPhotos] = useState(false);
     const [carouselFilter, setCarouselFilter] = useState('all');
     const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+    const [showThumbnailView, setShowThumbnailView] = useState(false);
     const currentPhotoNameRef = useRef(null);
     const [importPreview, setImportPreview] = useState(null);
     const [isLoadingPreview, setIsLoadingPreview] = useState(false);
@@ -640,96 +641,142 @@ function App() {
             <main className="App-main">
                 {photos.length > 0 ? (
                     <>
-                        {filteredPhotos.length > 0 ? (
-                            <div className="main-photo-area">
-                                {currentPhotoName && (
-                                    <div className="photo-filename-overlay">
-                                        <div className="filename">{currentPhotoName}</div>
-                                        <div className="photo-position-overlay">{currentIndex + 1} / {filteredPhotos.length}</div>
-                                    </div>
-                                )}
-                                {pinnedPhoto ? (
-                                    <div className="comparison-container">
-                                        <PhotoViewer
-                                            photoName={pinnedPhoto}
-                                            directory={currentDirectory}
-                                            isSelected={isPinnedSelected}
-                                            isSaved={isPinnedSaved}
-                                            isDeleted={isPinnedDeleted}
-                                        >
-                                            <p>{pinnedPhoto}</p>
-                                            <p className={`status ${isPinnedSaved ? 'status-saved' : (isPinnedSelected ? 'status-selected' : (isPinnedDeleted ? 'status-deleted' : ''))}`}>
-                                                {isPinnedSaved ? 'SAVED' : (isPinnedSelected ? 'SELECTED' : (isPinnedDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
-                                            </p>
-                                            <p className="status status-pinned">PINNED</p>
-                                        </PhotoViewer>
-                                        <PhotoViewer
-                                            photoName={currentPhotoName}
-                                            directory={currentDirectory}
-                                            isSelected={isSelected}
-                                            isSaved={isSaved}
-                                            isDeleted={isDeleted}
-                                        />
-                                    </div>
-                                ) : (
-                                    <PhotoViewer
-                                        photoName={currentPhotoName}
-                                        directory={currentDirectory}
-                                        isSelected={isSelected}
-                                        isSaved={isSaved}
-                                        isDeleted={isDeleted}
+                        {showThumbnailView ? (
+                            <div className="thumbnail-view-section">
+                                <div className="thumbnail-view-header">
+                                    <select
+                                        value={carouselFilter}
+                                        onChange={e => setCarouselFilter(e.target.value)}
+                                        className="carousel-filter-select"
+                                    >
+                                        <option value="all">All Images ({filterCounts.all})</option>
+                                        <option value="selected">Selected Only ({filterCounts.selected})</option>
+                                        <option value="deleted">Marked for Deletion ({filterCounts.deleted})</option>
+                                    </select>
+                                    <span className="thumbnail-view-count">{filteredPhotos.length} photo{filteredPhotos.length !== 1 ? 's' : ''}</span>
+                                </div>
+                                {filteredPhotos.length > 0 ? (
+                                    <ThumbnailGrid
+                                        photos={filteredPhotos}
+                                        currentIndex={currentIndex}
+                                        setCurrentIndex={(index) => {
+                                            setCurrentIndex(index);
+                                            setShowThumbnailView(false);
+                                        }}
+                                        currentDirectory={currentDirectory}
+                                        selectedPhotos={selectedPhotos}
+                                        savedPhotos={savedPhotos}
+                                        deletedPhotos={deletedPhotos}
                                     />
+                                ) : (
+                                    <div className="empty-filter-message">
+                                        <h2>
+                                            {carouselFilter === 'selected' ? 'No Selected Photos' :
+                                                carouselFilter === 'deleted' ? 'No Photos Marked for Deletion' :
+                                                    'No Photos'}
+                                        </h2>
+                                        <p>
+                                            {carouselFilter === 'selected' ? 'Switch to "All Images" or select some photos to view them here.' :
+                                                carouselFilter === 'deleted' ? 'Switch to "All Images" or mark some photos for deletion to view them here.' :
+                                                    'No photos available.'}
+                                        </p>
+                                    </div>
                                 )}
                             </div>
                         ) : (
-                            <div className="main-photo-area">
-                                <div className="empty-filter-message">
-                                    <h2>
-                                        {carouselFilter === 'selected' ? 'No Selected Photos' :
-                                            carouselFilter === 'deleted' ? 'No Photos Marked for Deletion' :
-                                                'No Photos'}
-                                    </h2>
-                                    <p>
-                                        {carouselFilter === 'selected' ? 'Switch to "All Images" or select some photos to view them here.' :
-                                            carouselFilter === 'deleted' ? 'Switch to "All Images" or mark some photos for deletion to view them here.' :
-                                                'No photos available.'}
-                                    </p>
+                            <>
+                                {filteredPhotos.length > 0 ? (
+                                    <div className="main-photo-area">
+                                        {currentPhotoName && (
+                                            <div className="photo-filename-overlay">
+                                                <div className="filename">{currentPhotoName}</div>
+                                                <div className="photo-position-overlay">{currentIndex + 1} / {filteredPhotos.length}</div>
+                                            </div>
+                                        )}
+                                        {pinnedPhoto ? (
+                                            <div className="comparison-container">
+                                                <PhotoViewer
+                                                    photoName={pinnedPhoto}
+                                                    directory={currentDirectory}
+                                                    isSelected={isPinnedSelected}
+                                                    isSaved={isPinnedSaved}
+                                                    isDeleted={isPinnedDeleted}
+                                                >
+                                                    <p>{pinnedPhoto}</p>
+                                                    <p className={`status ${isPinnedSaved ? 'status-saved' : (isPinnedSelected ? 'status-selected' : (isPinnedDeleted ? 'status-deleted' : ''))}`}>
+                                                        {isPinnedSaved ? 'SAVED' : (isPinnedSelected ? 'SELECTED' : (isPinnedDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
+                                                    </p>
+                                                    <p className="status status-pinned">PINNED</p>
+                                                </PhotoViewer>
+                                                <PhotoViewer
+                                                    photoName={currentPhotoName}
+                                                    directory={currentDirectory}
+                                                    isSelected={isSelected}
+                                                    isSaved={isSaved}
+                                                    isDeleted={isDeleted}
+                                                />
+                                            </div>
+                                        ) : (
+                                            <PhotoViewer
+                                                photoName={currentPhotoName}
+                                                directory={currentDirectory}
+                                                isSelected={isSelected}
+                                                isSaved={isSaved}
+                                                isDeleted={isDeleted}
+                                            />
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="main-photo-area">
+                                        <div className="empty-filter-message">
+                                            <h2>
+                                                {carouselFilter === 'selected' ? 'No Selected Photos' :
+                                                    carouselFilter === 'deleted' ? 'No Photos Marked for Deletion' :
+                                                        'No Photos'}
+                                            </h2>
+                                            <p>
+                                                {carouselFilter === 'selected' ? 'Switch to "All Images" or select some photos to view them here.' :
+                                                    carouselFilter === 'deleted' ? 'Switch to "All Images" or mark some photos for deletion to view them here.' :
+                                                        'No photos available.'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+                                <div className="carousel-wrapper">
+                                    <div className="carousel-filter-container">
+                                        <select
+                                            value={carouselFilter}
+                                            onChange={e => setCarouselFilter(e.target.value)}
+                                            className="carousel-filter-select"
+                                        >
+                                            <option value="all">All Images ({filterCounts.all})</option>
+                                            <option value="selected">Selected Only ({filterCounts.selected})</option>
+                                            <option value="deleted">Marked for Deletion ({filterCounts.deleted})</option>
+                                        </select>
+                                    </div>
+                                    {filteredPhotos.length > 0 ? (
+                                        <Carousel
+                                            photos={filteredPhotos}
+                                            currentIndex={currentIndex}
+                                            setCurrentIndex={setCurrentIndex}
+                                            currentDirectory={currentDirectory}
+                                            selectedPhotos={selectedPhotos}
+                                            savedPhotos={savedPhotos}
+                                            deletedPhotos={deletedPhotos}
+                                        />
+                                    ) : (
+                                        <div className="carousel-container">
+                                            <p className="carousel-empty-message">No photos to display</p>
+                                        </div>
+                                    )}
+                                    {currentPhotoName && (
+                                        <div className="carousel-filename-container">
+                                            <span className="carousel-filename">{currentPhotoName}</span>
+                                        </div>
+                                    )}
                                 </div>
-                            </div>
+                            </>
                         )}
-                        <div className="carousel-wrapper">
-                            <div className="carousel-filter-container">
-                                <select
-                                    value={carouselFilter}
-                                    onChange={e => setCarouselFilter(e.target.value)}
-                                    className="carousel-filter-select"
-                                >
-                                    <option value="all">All Images ({filterCounts.all})</option>
-                                    <option value="selected">Selected Only ({filterCounts.selected})</option>
-                                    <option value="deleted">Marked for Deletion ({filterCounts.deleted})</option>
-                                </select>
-                            </div>
-                            {filteredPhotos.length > 0 ? (
-                                <Carousel
-                                    photos={filteredPhotos}
-                                    currentIndex={currentIndex}
-                                    setCurrentIndex={setCurrentIndex}
-                                    currentDirectory={currentDirectory}
-                                    selectedPhotos={selectedPhotos}
-                                    savedPhotos={savedPhotos}
-                                    deletedPhotos={deletedPhotos}
-                                />
-                            ) : (
-                                <div className="carousel-container">
-                                    <p className="carousel-empty-message">No photos to display</p>
-                                </div>
-                            )}
-                            {currentPhotoName && (
-                                <div className="carousel-filename-container">
-                                    <span className="carousel-filename">{currentPhotoName}</span>
-                                </div>
-                            )}
-                        </div>
                     </>
                 ) : (
                     <div className="welcome-message">
@@ -754,6 +801,13 @@ function App() {
                         {isDeleted ? 'Unmark Delete (d)' : 'Mark Delete (d)'}
                     </button>
                     <button onClick={() => navigate(1)} disabled={filteredPhotos.length === 0 || photos.length === 0}>Next (→ or k)</button>
+                    <button
+                        onClick={() => setShowThumbnailView(!showThumbnailView)}
+                        disabled={photos.length === 0}
+                        className={`thumbnail-view-button ${showThumbnailView ? 'active' : ''}`}
+                    >
+                        {showThumbnailView ? 'Carousel View' : 'Thumbnail View'}
+                    </button>
                     <button onClick={handleSave} disabled={selectedPhotos.size === 0} className="save-button">
                         Save {selectedPhotos.size} new selections
                     </button>
@@ -823,6 +877,33 @@ function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, sel
                             src={`${API_URL}/thumbnail/${encodeURIComponent(currentDirectory)}/${encodeURIComponent(photoName)}`}
                             alt={`thumbnail-${photoName}`}
                         />
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+function ThumbnailGrid({ photos, currentIndex, setCurrentIndex, currentDirectory, selectedPhotos, savedPhotos, deletedPhotos }) {
+    return (
+        <div className="thumbnail-grid">
+            {photos.map((photoName, index) => {
+                const isSelected = selectedPhotos.has(photoName);
+                const isSaved = savedPhotos.has(photoName);
+                const isDeleted = deletedPhotos.has(photoName);
+                return (
+                    <div
+                        key={photoName}
+                        className={`thumbnail-grid-item ${index === currentIndex ? 'active' : ''} ${isSaved ? 'saved' : (isDeleted ? 'deleted' : (isSelected ? 'selected' : ''))}`}
+                        onClick={() => setCurrentIndex(index)}
+                        title={photoName}
+                    >
+                        <img
+                            src={`${API_URL}/thumbnail/${encodeURIComponent(currentDirectory)}/${encodeURIComponent(photoName)}`}
+                            alt={photoName}
+                            loading="lazy"
+                        />
+                        <div className="thumbnail-grid-label">{photoName}</div>
                     </div>
                 );
             })}
