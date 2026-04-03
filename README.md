@@ -22,6 +22,15 @@ Before you begin, ensure you have the following installed:
 - **Go 1.22+** (older versions should work too)
 - **Node.js and npm** (for building the frontend)
 
+**Or**, if you have Nix installed, you can skip the manual setup entirely and use:
+
+```bash
+nix-build
+./result/bin/backend
+```
+
+This will build the entire project (frontend + backend) and create a single self-contained binary.
+
 ## Installation & Setup
 
 ### 1. Clone the Repository
