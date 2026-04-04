@@ -29,10 +29,10 @@ import (
 var frontend embed.FS
 
 var (
-	photoBaseDir      string
-	thumbnailCacheDir string
+	photoBaseDir       string
+	thumbnailCacheDir  string
 	rawPreviewCacheDir string
-	thumbnailSize     = 200
+	thumbnailSize      = 200
 )
 
 type spaFileSystem struct {
@@ -1390,15 +1390,15 @@ func recentPathsHandler(w http.ResponseWriter, r *http.Request) {
 
 func importFromFolderPreviewHandler(w http.ResponseWriter, r *http.Request) {
 	var data struct {
-		SourceDirectory   string `json:"source_directory"`
-		DestinationBase   string `json:"destination_base"`
-		Since             string `json:"since"`
-		Until             string `json:"until"`
-		SkipDuplicates    bool   `json:"skip_duplicates"`
-		TargetDirectory   string `json:"target_directory"`
-		ImportVideos      bool   `json:"import_videos"`
-		ImportRawFiles    bool   `json:"import_raw_files"`
-		Recursive         bool   `json:"recursive"`
+		SourceDirectory string `json:"source_directory"`
+		DestinationBase string `json:"destination_base"`
+		Since           string `json:"since"`
+		Until           string `json:"until"`
+		SkipDuplicates  bool   `json:"skip_duplicates"`
+		TargetDirectory string `json:"target_directory"`
+		ImportVideos    bool   `json:"import_videos"`
+		ImportRawFiles  bool   `json:"import_raw_files"`
+		Recursive       bool   `json:"recursive"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil && err != io.EOF {
@@ -1560,15 +1560,15 @@ func importFromFolderPreviewHandler(w http.ResponseWriter, r *http.Request) {
 
 func importFromFolderHandler(w http.ResponseWriter, r *http.Request) {
 	var data struct {
-		SourceDirectory   string `json:"source_directory"`
-		DestinationBase   string `json:"destination_base"`
-		Since             string `json:"since"`
-		Until             string `json:"until"`
-		SkipDuplicates    bool   `json:"skip_duplicates"`
-		TargetDirectory   string `json:"target_directory"`
-		ImportVideos      bool   `json:"import_videos"`
-		ImportRawFiles    bool   `json:"import_raw_files"`
-		Recursive         bool   `json:"recursive"`
+		SourceDirectory string `json:"source_directory"`
+		DestinationBase string `json:"destination_base"`
+		Since           string `json:"since"`
+		Until           string `json:"until"`
+		SkipDuplicates  bool   `json:"skip_duplicates"`
+		TargetDirectory string `json:"target_directory"`
+		ImportVideos    bool   `json:"import_videos"`
+		ImportRawFiles  bool   `json:"import_raw_files"`
+		Recursive       bool   `json:"recursive"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil && err != io.EOF {
