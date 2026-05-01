@@ -1,15 +1,15 @@
 # Camera Photo Import & Selector
 
-A web-based application for importing photos from your camera's SD card, reviewing them, selecting the best shots, and exporting both JPEGs and raw CR3 files. Built with a Go backend and React frontend.
+A web-based application for importing photos from your camera's SD card, reviewing them, selecting the best shots, and exporting both JPEGs and raw files (CR3, ORF). Built with a Go backend and React frontend.
 
 ## Features
 
-- **Import from SD Card**: Automatically detects and imports JPEG photos from Canon cameras (DCIM/100CANON)
+- **Import from SD Card**: Automatically detects and imports JPEG photos from Canon (DCIM/100CANON) and Olympus (DCIM/100OLYMP) cameras
 - **Photo Review**: Navigate through imported photos with keyboard shortcuts
 - **Smart Selection**: Mark photos for export with visual feedback
 - **Pin & Compare**: Pin one photo to compare side-by-side with others
 - **Batch Export**: Copy selected JPEGs to an export folder
-- **Raw File Export**: Copy corresponding CR3 raw files directly from SD card for selected photos
+- **Raw File Export**: Copy corresponding raw files (Canon CR3, Olympus ORF) directly from SD card for selected photos
 - **Export Status Tracking**: Track how many raw files have been exported vs. how many are missing
 
 ## Screenshot
@@ -107,7 +107,7 @@ The frontend is embedded directly into the Go binary using Go's `embed` package.
 
 1. After saving selected photos, the **Export Raw Files** button becomes enabled
 2. Keep your SD card connected
-3. Click **Export Raw Files** to copy CR3 raw files from the SD card
+3. Click **Export Raw Files** to copy raw files (CR3 or ORF) from the SD card
 4. Raw files are copied to `~/Pictures/photos/[timestamp]/selected/raw/`
 5. The button shows how many raw files are missing
 6. Export status is displayed below the controls
@@ -172,18 +172,19 @@ The CI runs on every push to `main`/`master` branches and on all pull requests.
 
 ## Camera Compatibility
 
-Currently configured for Canon cameras that store photos in subdirectories like `DCIM/100CANON` and `DCIM/101CANON`. 
+Supports cameras whose SD cards follow the DCIM convention with brand-specific folder suffixes:
+
+| Brand   | DCIM folders        | RAW extension |
+| ------- | ------------------- | ------------- |
+| Canon   | `100CANON`, `101CANON`, … | `.CR3` |
+| Olympus | `100OLYMP`, `101OLYMP`, … | `.ORF` |
 
 ### Filename Collision Prevention
 To prevent collisions when multiple folders have files with the same name (e.g., `IMG_0001.JPG` in both `100CANON` and `101CANON`), the app automatically prefixes filenames with the numeric part of their source directory (e.g., `100_IMG_0001.JPG`).
 
 The app looks for:
 - **JPEGs**: `.jpg` and `.jpeg` files
-- **Raw files**: `.CR3` files (Canon raw format)
+- **Raw files**: `.CR3` (Canon) and `.ORF` (Olympus)
 
-### Customizing for Other Manufacturers
-To support other camera brands (e.g., Sony, Nikon, Fuji), you may need to modify the following in `backend-go/main.go`:
-1.  **`findUSBMountPoint()`**: Updates the directory detection logic.
-2.  **`getCanonPrefix()`**: This function extracts the prefix (like `100`) from the source directory name. If your camera uses a different folder naming convention (e.g., `100MSDCF`), update this logic to extract your desired prefix.
-3.  **`splitPrefixedFilename()`**: Update this to match your prefix format if you change how filenames are stored on disk.
-4.  **`importFromUSBHandler`**: Update the list of supported extensions (e.g., `.ARW`, `.NEF`, `.RAF`).
+### Adding Other Manufacturers
+To support additional brands (e.g., Sony, Nikon, Fuji), edit the `supportedBrands` table in `backend-go/main.go` to add the camera's DCIM folder suffix and RAW extension. For example, Sony cameras use `100MSDCF` folders and `.ARW` raw files. If your camera uses a folder naming convention that isn't a 3-digit prefix plus 5-letter suffix, you may also need to adjust `getDCIMPrefix()` and `splitPrefixedFilename()`.
