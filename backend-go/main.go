@@ -33,6 +33,47 @@ var (
 	thumbnailSize     = 200
 )
 
+type cameraBrand struct {
+	suffix string // DCIM folder suffix, e.g. "CANON", "OLYMP"
+	rawExt string // RAW file extension including dot, e.g. ".CR3", ".ORF"
+}
+
+var supportedBrands = []cameraBrand{
+	{suffix: "CANON", rawExt: ".CR3"},
+	{suffix: "OLYMP", rawExt: ".ORF"},
+}
+
+func detectCameraBrand(folderName string) *cameraBrand {
+	upper := strings.ToUpper(folderName)
+	for i := range supportedBrands {
+		if strings.HasSuffix(upper, supportedBrands[i].suffix) {
+			return &supportedBrands[i]
+		}
+	}
+	return nil
+}
+
+func isRawFile(name string) bool {
+	lower := strings.ToLower(name)
+	for _, b := range supportedBrands {
+		if strings.HasSuffix(lower, strings.ToLower(b.rawExt)) {
+			return true
+		}
+	}
+	return false
+}
+
+// rawAlreadyExported returns true if a raw file with the given base name (any supported
+// extension) already exists in dir.
+func rawAlreadyExported(dir, baseName string) bool {
+	for _, b := range supportedBrands {
+		if _, err := os.Stat(filepath.Join(dir, baseName+b.rawExt)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 type spaFileSystem struct {
 	root http.FileSystem
 }
@@ -322,13 +363,13 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 
 	usbMountPoint := findUSBMountPoint()
 	if usbMountPoint == "" {
-		http.Error(w, "USB device with 'DCIM/100CANON' or 'DCIM/101CANON' directory not found. Is it connected?", http.StatusNotFound)
+		http.Error(w, "USB device with a camera DCIM directory (e.g. 100CANON, 100OLYMP) not found. Is it connected?", http.StatusNotFound)
 		return
 	}
 
-	canonDirs := findCanonDirectories(usbMountPoint)
-	if len(canonDirs) == 0 {
-		http.Error(w, "Could not find 100CANON or 101CANON directory on USB device", http.StatusNotFound)
+	cameraDirs := findCameraDirectories(usbMountPoint)
+	if len(cameraDirs) == 0 {
+		http.Error(w, "Could not find a supported camera DCIM directory on USB device", http.StatusNotFound)
 		return
 	}
 
@@ -350,26 +391,26 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 
 	destinationDirCreated := !isNewBatch // If adding to existing, directory already exists
 
-	// Read files from all CANON directories, tracking which directory each file came from
+	// Read files from all camera DCIM directories, tracking which directory each file came from
 	type fileWithDir struct {
 		file os.FileInfo
 		dir  string
 	}
 	var allFiles []fileWithDir
-	for _, canonDir := range canonDirs {
-		sourceDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+	for _, cameraDir := range cameraDirs {
+		sourceDir := filepath.Join(usbMountPoint, "DCIM", cameraDir)
 		files, err := ioutil.ReadDir(sourceDir)
 		if err != nil {
 			log.Printf("Failed to read directory %s: %v", sourceDir, err)
 			continue
 		}
 		for _, file := range files {
-			allFiles = append(allFiles, fileWithDir{file: file, dir: canonDir})
+			allFiles = append(allFiles, fileWithDir{file: file, dir: cameraDir})
 		}
 	}
 
 	if len(allFiles) == 0 {
-		http.Error(w, "No files found in CANON directories", http.StatusNotFound)
+		http.Error(w, "No files found in camera DCIM directories", http.StatusNotFound)
 		return
 	}
 
@@ -412,10 +453,10 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			canonPrefix := getCanonPrefix(fileEntry.dir)
+			dirPrefix := getDCIMPrefix(fileEntry.dir)
 			destFilename := file.Name()
-			if canonPrefix != "" {
-				destFilename = canonPrefix + "_" + file.Name()
+			if dirPrefix != "" {
+				destFilename = dirPrefix + "_" + file.Name()
 			}
 
 			// Check if file has already been imported to any directory (O(1) lookup)
@@ -554,20 +595,20 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 			"files_to_import": 0,
 			"files_to_skip":   0,
 			"usb_connected":   false,
-			"error":           "USB device with DCIM/Canon directory not found",
+			"error":           "USB device with a camera DCIM directory not found",
 		})
 		return
 	}
 
-	canonDirs := findCanonDirectories(usbMountPoint)
-	if len(canonDirs) == 0 {
+	cameraDirs := findCameraDirectories(usbMountPoint)
+	if len(cameraDirs) == 0 {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"total_files":     0,
 			"files_to_import": 0,
 			"files_to_skip":   0,
 			"usb_connected":   true,
-			"error":           "Could not find Canon directories on USB device",
+			"error":           "Could not find supported camera directories on USB device",
 		})
 		return
 	}
@@ -583,21 +624,21 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Read files from all CANON directories
+	// Read files from all camera DCIM directories
 	type fileWithDir struct {
 		file os.FileInfo
 		dir  string
 	}
 	var allFiles []fileWithDir
-	for _, canonDir := range canonDirs {
-		sourceDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+	for _, cameraDir := range cameraDirs {
+		sourceDir := filepath.Join(usbMountPoint, "DCIM", cameraDir)
 		files, err := ioutil.ReadDir(sourceDir)
 		if err != nil {
 			log.Printf("Failed to read directory %s: %v", sourceDir, err)
 			continue
 		}
 		for _, file := range files {
-			allFiles = append(allFiles, fileWithDir{file: file, dir: canonDir})
+			allFiles = append(allFiles, fileWithDir{file: file, dir: cameraDir})
 		}
 	}
 
@@ -662,10 +703,10 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			canonPrefix := getCanonPrefix(fileEntry.dir)
+			dirPrefix := getDCIMPrefix(fileEntry.dir)
 			destFilename := file.Name()
-			if canonPrefix != "" {
-				destFilename = canonPrefix + "_" + file.Name()
+			if dirPrefix != "" {
+				destFilename = dirPrefix + "_" + file.Name()
 			}
 
 			// Check if already imported
@@ -721,13 +762,12 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 	// Find USB/SD card mount point
 	usbMountPoint := findUSBMountPoint()
 	if usbMountPoint == "" {
-		http.Error(w, "USB device with 'DCIM/100CANON' or 'DCIM/101CANON' directory not found. Is the SD card connected?", http.StatusNotFound)
+		http.Error(w, "USB device with a camera DCIM directory (e.g. 100CANON, 100OLYMP) not found. Is the SD card connected?", http.StatusNotFound)
 		return
 	}
 
-	canonDirs := findCanonDirectories(usbMountPoint)
-	if len(canonDirs) == 0 {
-		http.Error(w, "Could not find 100CANON or 101CANON directory on USB device", http.StatusNotFound)
+	if len(findCameraDirectories(usbMountPoint)) == 0 {
+		http.Error(w, "Could not find a supported camera DCIM directory on USB device", http.StatusNotFound)
 		return
 	}
 
@@ -773,59 +813,21 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 		baseName := strings.TrimSuffix(jpegFile, ext)
 
 		prefix, originalBaseName := splitPrefixedFilename(baseName)
-		rawFileName := originalBaseName + ".CR3"
 
-		// Look for raw file on SD card
-		var rawSourcePath string
-		var found bool
-
-		if prefix != "" {
-			// If we have a prefix, try that directory first
-			targetDir := prefix + "CANON"
-			// Check if this case-specific directory exists (try uppercase CANON first as it's standard)
-			checkPath := filepath.Join(usbMountPoint, "DCIM", targetDir, rawFileName)
-			if _, err := os.Stat(checkPath); err == nil {
-				rawSourcePath = checkPath
-				found = true
-			} else {
-				// Try lowercase canon
-				targetDirLow := prefix + "canon"
-				checkPath = filepath.Join(usbMountPoint, "DCIM", targetDirLow, rawFileName)
-				if _, err := os.Stat(checkPath); err == nil {
-					rawSourcePath = checkPath
-					found = true
-				}
-			}
-		}
-
-		// Fallback or if no prefix: look in all directories
-		if !found {
-			for _, canonDir := range canonDirs {
-				sdCardDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
-				checkPath := filepath.Join(sdCardDir, rawFileName)
-				if _, err := os.Stat(checkPath); err == nil {
-					rawSourcePath = checkPath
-					found = true
-					break
-				}
-			}
-		}
-
-		rawDestFileName := baseName + ".CR3"
-		rawDestPath := filepath.Join(rawDestDir, rawDestFileName)
-
-		// Check if raw file already exists at destination
-		if _, err := os.Stat(rawDestPath); err == nil {
+		// Skip if a raw file (any supported extension) is already at destination
+		if rawAlreadyExported(rawDestDir, baseName) {
 			skippedCount++
 			continue
 		}
 
-		// Check if raw file exists on SD card
+		rawSourcePath, rawExt, found := findRawForJPG(usbMountPoint, prefix, originalBaseName)
 		if !found {
-			log.Printf("Raw file not found on SD card in any CANON directory: %s", rawFileName)
+			log.Printf("Raw file not found on SD card for %s", originalBaseName)
 			notFoundCount++
 			continue
 		}
+
+		rawDestPath := filepath.Join(rawDestDir, baseName+rawExt)
 
 		// Copy the raw file from SD card
 		source, err := os.Open(rawSourcePath)
@@ -879,7 +881,7 @@ func exportRawSingleFileHandler(w http.ResponseWriter, r *http.Request) {
 	// Find USB/SD card mount point
 	usbMountPoint := findUSBMountPoint()
 	if usbMountPoint == "" {
-		http.Error(w, "USB device with 'DCIM/100CANON' directory not found. Is the SD card connected?", http.StatusNotFound)
+		http.Error(w, "USB device with a camera DCIM directory (e.g. 100CANON, 100OLYMP) not found. Is the SD card connected?", http.StatusNotFound)
 		return
 	}
 
@@ -898,51 +900,9 @@ func exportRawSingleFileHandler(w http.ResponseWriter, r *http.Request) {
 	baseName := strings.TrimSuffix(data.Filename, ext)
 
 	prefix, originalBaseName := splitPrefixedFilename(baseName)
-	rawFileName := originalBaseName + ".CR3"
 
-	// Look for raw file on SD card
-	var rawSourcePath string
-	found := false
-	if prefix != "" {
-		targetDir := prefix + "CANON"
-		checkPath := filepath.Join(usbMountPoint, "DCIM", targetDir, rawFileName)
-		if _, err := os.Stat(checkPath); err == nil {
-			rawSourcePath = checkPath
-			found = true
-		} else {
-			targetDirLow := prefix + "canon"
-			checkPath = filepath.Join(usbMountPoint, "DCIM", targetDirLow, rawFileName)
-			if _, err := os.Stat(checkPath); err == nil {
-				rawSourcePath = checkPath
-				found = true
-			}
-		}
-	}
-
-	if !found {
-		// Fallback to searching all directories
-		canonDirs := findCanonDirectories(usbMountPoint)
-		for _, canonDir := range canonDirs {
-			sdCardDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
-			checkPath := filepath.Join(sdCardDir, rawFileName)
-			if _, err := os.Stat(checkPath); err == nil {
-				rawSourcePath = checkPath
-				found = true
-				break
-			}
-		}
-	}
-
-	if !found {
-		http.Error(w, "Raw file not found on SD card", http.StatusNotFound)
-		return
-	}
-
-	rawDestFileName := baseName + ".CR3"
-	rawDestPath := filepath.Join(rawDestDir, rawDestFileName)
-
-	// Check if raw file already exists at destination
-	if _, err := os.Stat(rawDestPath); err == nil {
+	// Skip if a raw file (any supported extension) is already at destination
+	if rawAlreadyExported(rawDestDir, baseName) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"message": "Raw file already exported",
@@ -951,11 +911,13 @@ func exportRawSingleFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if raw file exists on SD card
-	if _, err := os.Stat(rawSourcePath); os.IsNotExist(err) {
+	rawSourcePath, rawExt, found := findRawForJPG(usbMountPoint, prefix, originalBaseName)
+	if !found {
 		http.Error(w, "Raw file not found on SD card", http.StatusNotFound)
 		return
 	}
+
+	rawDestPath := filepath.Join(rawDestDir, baseName+rawExt)
 
 	// Copy the raw file from SD card
 	source, err := os.Open(rawSourcePath)
@@ -1013,17 +975,15 @@ func exportStatusHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Count CR3 files in raw directory
+	// Count raw files in raw directory (any supported extension)
 	rawCount := 0
-	rawFileMap := make(map[string]bool)
+	rawBaseSet := make(map[string]bool)
 	if files, err := ioutil.ReadDir(rawDir); err == nil {
 		for _, file := range files {
-			if !file.IsDir() {
-				lowerName := strings.ToLower(file.Name())
-				if strings.HasSuffix(lowerName, ".cr3") {
-					rawCount++
-					rawFileMap[file.Name()] = true
-				}
+			if !file.IsDir() && isRawFile(file.Name()) {
+				rawCount++
+				base := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+				rawBaseSet[strings.ToLower(base)] = true
 			}
 		}
 	}
@@ -1031,10 +991,8 @@ func exportStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Calculate missing raw files
 	missingCount := 0
 	for _, jpegFile := range jpegFiles {
-		ext := filepath.Ext(jpegFile)
-		baseName := strings.TrimSuffix(jpegFile, ext)
-		rawFileName := baseName + ".CR3"
-		if !rawFileMap[rawFileName] {
+		base := strings.TrimSuffix(jpegFile, filepath.Ext(jpegFile))
+		if !rawBaseSet[strings.ToLower(base)] {
 			missingCount++
 		}
 	}
@@ -1056,13 +1014,13 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 	// Find USB/SD card mount point
 	usbMountPoint := findUSBMountPoint()
 	if usbMountPoint == "" {
-		http.Error(w, "USB device with 'DCIM/100CANON' or 'DCIM/101CANON' directory not found. Is it connected?", http.StatusNotFound)
+		http.Error(w, "USB device with a camera DCIM directory (e.g. 100CANON, 100OLYMP) not found. Is it connected?", http.StatusNotFound)
 		return
 	}
 
-	canonDirs := findCanonDirectories(usbMountPoint)
-	if len(canonDirs) == 0 {
-		http.Error(w, "Could not find 100CANON or 101CANON directory on USB device", http.StatusNotFound)
+	cameraDirs := findCameraDirectories(usbMountPoint)
+	if len(cameraDirs) == 0 {
+		http.Error(w, "Could not find a supported camera DCIM directory on USB device", http.StatusNotFound)
 		return
 	}
 
@@ -1075,9 +1033,9 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 	notFoundCount := 0
 	errorCount := 0
 
-	// Process files from all CANON directories
-	for _, canonDir := range canonDirs {
-		sourceDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+	// Process files from all camera DCIM directories
+	for _, cameraDir := range cameraDirs {
+		sourceDir := filepath.Join(usbMountPoint, "DCIM", cameraDir)
 		files, err := ioutil.ReadDir(sourceDir)
 		if err != nil {
 			log.Printf("Failed to read directory %s: %v", sourceDir, err)
@@ -1094,10 +1052,10 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				canonPrefix := getCanonPrefix(canonDir)
+				dirPrefix := getDCIMPrefix(cameraDir)
 				destFilename := file.Name()
-				if canonPrefix != "" {
-					destFilename = canonPrefix + "_" + file.Name()
+				if dirPrefix != "" {
+					destFilename = dirPrefix + "_" + file.Name()
 				}
 
 				// Only delete files that are in the imported set
@@ -1109,14 +1067,13 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 
 						// If it's a JPG, also try to delete the associated RAW file
 						if isJpg {
-							ext := filepath.Ext(file.Name())
-							baseName := strings.TrimSuffix(file.Name(), ext)
-							rawFileName := baseName + ".CR3"
-							rawFilePath := filepath.Join(sourceDir, rawFileName)
-
-							if err := os.Remove(rawFilePath); err == nil {
-								deletedRawCount++
-								log.Printf("Deleted associated RAW file: %s", rawFileName)
+							baseName := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+							if brand := detectCameraBrand(cameraDir); brand != nil {
+								rawFilePath := filepath.Join(sourceDir, baseName+brand.rawExt)
+								if err := os.Remove(rawFilePath); err == nil {
+									deletedRawCount++
+									log.Printf("Deleted associated RAW file: %s", baseName+brand.rawExt)
+								}
 							}
 						}
 					} else {
@@ -1233,31 +1190,69 @@ func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// findCanonDirectories returns all existing CANON directories (100CANON and/or 101CANON)
-func findCanonDirectories(mountPoint string) []string {
-	var canonDirs []string
+// findCameraDirectories returns DCIM subdirectories whose suffix matches a supported brand
+// (e.g. 100CANON, 101CANON, 100OLYMP).
+func findCameraDirectories(mountPoint string) []string {
+	var dirs []string
 	dcimPath := filepath.Join(mountPoint, "DCIM")
 	files, err := ioutil.ReadDir(dcimPath)
 	if err != nil {
-		return canonDirs
+		return dirs
 	}
 
 	re := regexp.MustCompile(`^[0-9]{3}`)
 	for _, file := range files {
-		if file.IsDir() && re.MatchString(file.Name()) {
-			canonDirs = append(canonDirs, file.Name())
+		if file.IsDir() && re.MatchString(file.Name()) && detectCameraBrand(file.Name()) != nil {
+			dirs = append(dirs, file.Name())
 		}
 	}
-	return canonDirs
+	return dirs
 }
 
-// findCanonDirectory checks for both 100CANON and 101CANON directories (returns first found for backward compatibility)
-func findCanonDirectory(mountPoint string) string {
-	canonDirs := findCanonDirectories(mountPoint)
-	if len(canonDirs) > 0 {
-		return canonDirs[0]
+func findCameraDirectory(mountPoint string) string {
+	dirs := findCameraDirectories(mountPoint)
+	if len(dirs) > 0 {
+		return dirs[0]
 	}
 	return ""
+}
+
+// findRawForJPG locates the RAW file on the camera card matching the given JPG base name.
+// It prefers a DCIM folder whose 3-digit prefix matches the JPG's prefix, and falls back to
+// scanning all camera folders.
+func findRawForJPG(mountPoint, prefix, originalBaseName string) (rawPath, rawExt string, found bool) {
+	cameraDirs := findCameraDirectories(mountPoint)
+
+	check := func(dir string) (string, string, bool) {
+		brand := detectCameraBrand(dir)
+		if brand == nil {
+			return "", "", false
+		}
+		candidate := filepath.Join(mountPoint, "DCIM", dir, originalBaseName+brand.rawExt)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, brand.rawExt, true
+		}
+		return "", "", false
+	}
+
+	if prefix != "" {
+		for _, dir := range cameraDirs {
+			if !strings.HasPrefix(dir, prefix) {
+				continue
+			}
+			if path, ext, ok := check(dir); ok {
+				return path, ext, true
+			}
+		}
+	}
+
+	for _, dir := range cameraDirs {
+		if path, ext, ok := check(dir); ok {
+			return path, ext, true
+		}
+	}
+
+	return "", "", false
 }
 
 func findUSBMountPoint() string {
@@ -1271,7 +1266,7 @@ func findUSBMountPoint() string {
 		for _, dir := range dirs {
 			if dir.IsDir() {
 				mountPoint := filepath.Join(volumesDir, dir.Name())
-				if findCanonDirectory(mountPoint) != "" {
+				if findCameraDirectory(mountPoint) != "" {
 					return mountPoint
 				}
 			}
@@ -1285,7 +1280,7 @@ func findUSBMountPoint() string {
 		for _, dir := range dirs {
 			if dir.IsDir() {
 				mountPoint := filepath.Join(mediaDir, dir.Name())
-				if findCanonDirectory(mountPoint) != "" {
+				if findCameraDirectory(mountPoint) != "" {
 					return mountPoint
 				}
 			}
@@ -1399,7 +1394,7 @@ func serveThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, thumbnailPath)
 }
 
-func getCanonPrefix(dir string) string {
+func getDCIMPrefix(dir string) string {
 	if len(dir) >= 3 {
 		prefix := dir[:3]
 		if _, err := strconv.Atoi(prefix); err == nil {
