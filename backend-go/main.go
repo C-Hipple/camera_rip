@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nfnt/resize"
@@ -1333,7 +1334,9 @@ func generateThumbnail(directory, filename string) error {
 func preGenerateThumbnails(directory string, photos []string) {
 	const numWorkers = 20
 	var wg sync.WaitGroup
-	photoChan := make(chan string, len(photos))
+	var completed atomic.Int64
+	total := len(photos)
+	photoChan := make(chan string, total)
 
 	// Start worker goroutines
 	for i := 0; i < numWorkers; i++ {
@@ -1343,6 +1346,10 @@ func preGenerateThumbnails(directory string, photos []string) {
 			for filename := range photoChan {
 				if err := generateThumbnail(directory, filename); err != nil {
 					log.Printf("Failed to generate thumbnail for %s: %v", filename, err)
+				}
+				n := completed.Add(1)
+				if n%50 == 0 {
+					log.Printf("Thumbnail generation progress for %s: %d/%d", directory, n, total)
 				}
 			}
 		}()
