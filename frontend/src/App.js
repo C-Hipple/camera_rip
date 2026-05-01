@@ -387,6 +387,83 @@ function App() {
         setIsDeletingPhotos(false);
     };
 
+    const handleCopyToClipboard = useCallback(async (photoName) => {
+        if (!photoName || !currentDirectory) return;
+
+        const toastId = toast.loading("Copying image to clipboard...");
+
+        try {
+            // Check if clipboard API is available
+            if (!navigator.clipboard || !navigator.clipboard.write) {
+                toast.update(toastId, {
+                    render: "Clipboard API not supported in this browser",
+                    type: "error",
+                    isLoading: false,
+                    autoClose: 3000
+                });
+                return;
+            }
+
+            // Fetch the image
+            const imageUrl = `${API_URL}/photos/${encodeURIComponent(currentDirectory)}/${encodeURIComponent(photoName)}`;
+            const response = await fetch(imageUrl);
+
+            if (!response.ok) {
+                throw new Error('Failed to fetch image');
+            }
+
+            const blob = await response.blob();
+
+            // Convert to PNG using canvas (more compatible with clipboard)
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+
+            await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = reject;
+                img.src = URL.createObjectURL(blob);
+            });
+
+            // Create canvas and draw image
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+
+            // Clean up object URL
+            URL.revokeObjectURL(img.src);
+
+            // Convert canvas to PNG blob
+            const pngBlob = await new Promise(resolve => {
+                canvas.toBlob(resolve, 'image/png');
+            });
+
+            // Create a ClipboardItem with the PNG blob
+            const clipboardItem = new ClipboardItem({
+                'image/png': pngBlob
+            });
+
+            // Write to clipboard
+            await navigator.clipboard.write([clipboardItem]);
+
+            toast.update(toastId, {
+                render: `${photoName} copied to clipboard!`,
+                type: "success",
+                isLoading: false,
+                autoClose: 2000
+            });
+        } catch (err) {
+            console.error('Failed to copy image to clipboard:', err);
+            toast.update(toastId, {
+                render: `Failed to copy: ${err.message || 'Unknown error'}`,
+                type: "error",
+                isLoading: false,
+                autoClose: 5000
+            });
+        }
+    }, [currentDirectory]);
+
     // Filter photos based on carousel filter mode
     const filteredPhotos = React.useMemo(() => {
         if (carouselFilter === 'selected') {
@@ -490,6 +567,8 @@ function App() {
                     if (next) setPinnedPhoto(null);
                     return next;
                 });
+            } else if ((e.key === 'c' || e.key === 'C') && isFullscreen) {
+                handleCopyToClipboard(currentPhotoName);
             } else if (e.key === 'ArrowRight' || e.key === 'k') {
                 navigate(1);
             } else if (e.key === 'ArrowLeft' || e.key === 'j') {
@@ -507,7 +586,7 @@ function App() {
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [currentIndex, filteredPhotos, handleSelection, handleDeletion, navigate, pinnedPhoto, deletedPhotos, isFullscreen]);
+    }, [currentIndex, filteredPhotos, handleSelection, handleDeletion, navigate, pinnedPhoto, deletedPhotos, isFullscreen, handleCopyToClipboard]);
 
     const currentPhotoName = filteredPhotos.length > 0 && currentIndex < filteredPhotos.length
         ? filteredPhotos[currentIndex]
@@ -1026,7 +1105,7 @@ function App() {
                     )}
                 </div>
                 <div className="instructions">
-                    <p>Use 's' to select, 'x' to unselect, 'd' to mark for deletion, 'h' to pin/unpin, and 'f' to toggle fullscreen. In fullscreen: double-click or ↑/↓ arrows to zoom, mouse wheel also works. Press 'Escape' to exit fullscreen or clear pinned photo.</p>
+                    <p>Use 's' to select, 'x' to unselect, 'd' to mark for deletion, 'h' to pin/unpin, and 'f' to toggle fullscreen. In fullscreen: 'c' to copy to clipboard, double-click or ↑/↓ arrows to zoom, mouse wheel also works. Press 'Escape' to exit fullscreen or clear pinned photo.</p>
                     {exportStatus.selected_count > 0 && (
                         <p className="export-status">
                             Export Status: {exportStatus.selected_count} selected JPEGs, {exportStatus.raw_count} raw files exported, {exportStatus.missing_count} missing
