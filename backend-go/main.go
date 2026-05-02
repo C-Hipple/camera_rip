@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -21,7 +24,6 @@ import (
 	"time"
 
 	"github.com/nfnt/resize"
-	"regexp"
 )
 
 //go:embed all:frontend/build
@@ -380,6 +382,18 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Skip duplicates enabled: found %d already imported files", len(importedFiles))
 	}
 
+	// Detect raw-only mode: camera is set to RAW only (no JPEGs on SD card)
+	rawOnlyMode := true
+	for _, fe := range allFiles {
+		if strings.HasSuffix(strings.ToLower(fe.file.Name()), ".jpg") {
+			rawOnlyMode = false
+			break
+		}
+	}
+	if rawOnlyMode {
+		log.Printf("Raw-only mode detected: no JPEGs found on SD card, will import CR3 files")
+	}
+
 	copiedCount := 0
 	skippedDuplicates := 0
 	var copiedFiles []string
@@ -387,11 +401,17 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		file := fileEntry.file
 		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
 			lowerName := strings.ToLower(file.Name())
-			// Process .jpg files always, and .mp4 files only if import_videos is enabled
 			isJpg := strings.HasSuffix(lowerName, ".jpg")
+			isCR3 := strings.HasSuffix(lowerName, ".cr3")
 			isMp4 := strings.HasSuffix(lowerName, ".mp4")
-			if !isJpg && (!isMp4 || !data.ImportVideos) {
-				continue
+			if rawOnlyMode {
+				if !isCR3 && (!isMp4 || !data.ImportVideos) {
+					continue
+				}
+			} else {
+				if !isJpg && (!isMp4 || !data.ImportVideos) {
+					continue
+				}
 			}
 
 			sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
@@ -458,9 +478,24 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			copiedCount++
-			// Only add image files to copiedFiles for thumbnail generation
 			if isJpg {
 				copiedFiles = append(copiedFiles, destFilename)
+			} else if isCR3 && rawOnlyMode {
+				// Extract embedded JPEG preview from the CR3 for display in the browser
+				img, err := extractCR3Preview(destinationFile)
+				if err == nil {
+					previewBaseName := strings.TrimSuffix(destFilename, filepath.Ext(destFilename))
+					previewFilename := previewBaseName + ".JPG"
+					previewPath := filepath.Join(destinationDir, previewFilename)
+					if out, createErr := os.Create(previewPath); createErr == nil {
+						if encErr := jpeg.Encode(out, img, &jpeg.Options{Quality: 90}); encErr == nil {
+							copiedFiles = append(copiedFiles, previewFilename)
+						}
+						out.Close()
+					}
+				} else {
+					log.Printf("Failed to extract CR3 preview for %s: %v", destFilename, err)
+				}
 			}
 		}
 	}
@@ -607,6 +642,15 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		importedFiles = buildImportedFilesSet()
 	}
 
+	// Detect raw-only mode
+	rawOnlyMode := true
+	for _, fe := range allFiles {
+		if strings.HasSuffix(strings.ToLower(fe.file.Name()), ".jpg") {
+			rawOnlyMode = false
+			break
+		}
+	}
+
 	totalFiles := 0
 	filesToImport := 0
 	skippedDuplicates := 0
@@ -620,19 +664,35 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
 			lowerName := strings.ToLower(file.Name())
 			isJpg := strings.HasSuffix(lowerName, ".jpg")
+			isCR3 := strings.HasSuffix(lowerName, ".cr3")
 			isMp4 := strings.HasSuffix(lowerName, ".mp4")
 
-			// Count all potential files
-			if isJpg || isMp4 {
-				totalFiles++
+			// Count all relevant files based on mode
+			if rawOnlyMode {
+				if isCR3 || isMp4 {
+					totalFiles++
+				}
+			} else {
+				if isJpg || isMp4 {
+					totalFiles++
+				}
 			}
 
-			// Skip if not jpg and not importing videos
-			if !isJpg && (!isMp4 || !data.ImportVideos) {
-				if isMp4 {
-					skippedVideos++
+			// Skip non-relevant files
+			if rawOnlyMode {
+				if !isCR3 && (!isMp4 || !data.ImportVideos) {
+					if isMp4 {
+						skippedVideos++
+					}
+					continue
 				}
-				continue
+			} else {
+				if !isJpg && (!isMp4 || !data.ImportVideos) {
+					if isMp4 {
+						skippedVideos++
+					}
+					continue
+				}
 			}
 
 			sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
@@ -700,6 +760,7 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		"skipped_videos":     skippedVideos,
 		"usb_connected":      true,
 		"daily_breakdown":    dailyBreakdown,
+		"raw_only_mode":      rawOnlyMode,
 	})
 }
 
@@ -718,17 +779,11 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find USB/SD card mount point
+	// Find USB/SD card mount point — optional for raw-only imports where CR3s are already local
 	usbMountPoint := findUSBMountPoint()
-	if usbMountPoint == "" {
-		http.Error(w, "USB device with 'DCIM/100CANON' or 'DCIM/101CANON' directory not found. Is the SD card connected?", http.StatusNotFound)
-		return
-	}
-
-	canonDirs := findCanonDirectories(usbMountPoint)
-	if len(canonDirs) == 0 {
-		http.Error(w, "Could not find 100CANON or 101CANON directory on USB device", http.StatusNotFound)
-		return
+	canonDirs := []string{}
+	if usbMountPoint != "" {
+		canonDirs = findCanonDirectories(usbMountPoint)
 	}
 
 	sourceDir := filepath.Join(photoBaseDir, data.Directory)
@@ -774,43 +829,6 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 
 		prefix, originalBaseName := splitPrefixedFilename(baseName)
 		rawFileName := originalBaseName + ".CR3"
-
-		// Look for raw file on SD card
-		var rawSourcePath string
-		var found bool
-
-		if prefix != "" {
-			// If we have a prefix, try that directory first
-			targetDir := prefix + "CANON"
-			// Check if this case-specific directory exists (try uppercase CANON first as it's standard)
-			checkPath := filepath.Join(usbMountPoint, "DCIM", targetDir, rawFileName)
-			if _, err := os.Stat(checkPath); err == nil {
-				rawSourcePath = checkPath
-				found = true
-			} else {
-				// Try lowercase canon
-				targetDirLow := prefix + "canon"
-				checkPath = filepath.Join(usbMountPoint, "DCIM", targetDirLow, rawFileName)
-				if _, err := os.Stat(checkPath); err == nil {
-					rawSourcePath = checkPath
-					found = true
-				}
-			}
-		}
-
-		// Fallback or if no prefix: look in all directories
-		if !found {
-			for _, canonDir := range canonDirs {
-				sdCardDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
-				checkPath := filepath.Join(sdCardDir, rawFileName)
-				if _, err := os.Stat(checkPath); err == nil {
-					rawSourcePath = checkPath
-					found = true
-					break
-				}
-			}
-		}
-
 		rawDestFileName := baseName + ".CR3"
 		rawDestPath := filepath.Join(rawDestDir, rawDestFileName)
 
@@ -820,9 +838,49 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Check if raw file exists on SD card
+		var rawSourcePath string
+		found := false
+
+		// First: check if CR3 is already in the local session directory (raw-only import)
+		localCR3Path := filepath.Join(sourceDir, rawDestFileName)
+		if _, err := os.Stat(localCR3Path); err == nil {
+			rawSourcePath = localCR3Path
+			found = true
+		}
+
+		// Second: look for raw file on SD card (JPEG+RAW mode)
+		if !found && usbMountPoint != "" {
+			if prefix != "" {
+				targetDir := prefix + "CANON"
+				checkPath := filepath.Join(usbMountPoint, "DCIM", targetDir, rawFileName)
+				if _, err := os.Stat(checkPath); err == nil {
+					rawSourcePath = checkPath
+					found = true
+				} else {
+					targetDirLow := prefix + "canon"
+					checkPath = filepath.Join(usbMountPoint, "DCIM", targetDirLow, rawFileName)
+					if _, err := os.Stat(checkPath); err == nil {
+						rawSourcePath = checkPath
+						found = true
+					}
+				}
+			}
+
+			if !found {
+				for _, canonDir := range canonDirs {
+					sdCardDir := filepath.Join(usbMountPoint, "DCIM", canonDir)
+					checkPath := filepath.Join(sdCardDir, rawFileName)
+					if _, err := os.Stat(checkPath); err == nil {
+						rawSourcePath = checkPath
+						found = true
+						break
+					}
+				}
+			}
+		}
+
 		if !found {
-			log.Printf("Raw file not found on SD card in any CANON directory: %s", rawFileName)
+			log.Printf("Raw file not found locally or on SD card: %s", rawFileName)
 			notFoundCount++
 			continue
 		}
@@ -1087,10 +1145,10 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 		for _, file := range files {
 			if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
 				lowerName := strings.ToLower(file.Name())
-				// Process both .jpg and .mp4 files
 				isJpg := strings.HasSuffix(lowerName, ".jpg")
+				isCR3 := strings.HasSuffix(lowerName, ".cr3")
 				isMp4 := strings.HasSuffix(lowerName, ".mp4")
-				if !isJpg && !isMp4 {
+				if !isJpg && !isCR3 && !isMp4 {
 					continue
 				}
 
@@ -1417,4 +1475,43 @@ func splitPrefixedFilename(filename string) (prefix string, originalName string)
 		}
 	}
 	return "", filename
+}
+
+// extractCR3Preview extracts the largest embedded JPEG preview from a Canon CR3 file.
+// CR3 files embed one or more JPEG previews in their ISOBMFF container structure.
+func extractCR3Preview(cr3Path string) (image.Image, error) {
+	f, err := os.Open(cr3Path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// The embedded preview JPEG is always within the first several MB of the file,
+	// before the main raw image data block.
+	const scanSize = 10 * 1024 * 1024
+	data := make([]byte, scanSize)
+	n, _ := f.Read(data)
+	data = data[:n]
+
+	var bestImg image.Image
+	var bestArea int
+
+	for i := 0; i < len(data)-2; i++ {
+		if data[i] == 0xFF && data[i+1] == 0xD8 && data[i+2] == 0xFF {
+			img, err := jpeg.Decode(bytes.NewReader(data[i:]))
+			if err == nil {
+				b := img.Bounds()
+				area := b.Dx() * b.Dy()
+				if area > bestArea {
+					bestArea = area
+					bestImg = img
+				}
+			}
+		}
+	}
+
+	if bestImg == nil {
+		return nil, fmt.Errorf("no valid JPEG preview found in CR3 file")
+	}
+	return bestImg, nil
 }

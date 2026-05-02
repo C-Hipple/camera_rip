@@ -615,9 +615,15 @@ function App() {
                                 <p className="preview-error">{importPreview.error}</p>
                             ) : (
                                 <>
+                                    {importPreview.raw_only_mode && (
+                                        <div className="preview-stat raw-only-badge">
+                                            <span className="preview-label">Mode:</span>
+                                            <span className="preview-value">RAW only (CR3)</span>
+                                        </div>
+                                    )}
                                     <div className="preview-stat main">
                                         <span className="preview-label">Will import:</span>
-                                        <span className="preview-value">{importPreview.files_to_import} photos</span>
+                                        <span className="preview-value">{importPreview.files_to_import} {importPreview.raw_only_mode ? 'raw files' : 'photos'}</span>
                                     </div>
                                     {importPreview.daily_breakdown && Object.keys(importPreview.daily_breakdown).length > 0 && (
                                         <div className="daily-breakdown">
