@@ -21,6 +21,7 @@ function App() {
     const [skipDuplicates, setSkipDuplicates] = useState(true);
     const [addToCurrentBatch, setAddToCurrentBatch] = useState(false);
     const [importVideos, setImportVideos] = useState(false);
+    const [importRaws, setImportRaws] = useState(false);
     const [pinnedPhoto, setPinnedPhoto] = useState(null);
     const [exportStatus, setExportStatus] = useState({ selected_count: 0, raw_count: 0, missing_count: 0 });
     const [isExportingRaw, setIsExportingRaw] = useState(false);
@@ -82,7 +83,8 @@ function App() {
                     until: untilDate,
                     skip_duplicates: skipDuplicates,
                     target_directory: addToCurrentBatch ? currentDirectory : '',
-                    import_videos: importVideos
+                    import_videos: importVideos,
+                    import_raws: importRaws
                 })
             });
             const data = await response.json();
@@ -95,7 +97,7 @@ function App() {
             setImportPreview(null);
         }
         setIsLoadingPreview(false);
-    }, [sinceDate, untilDate, skipDuplicates, addToCurrentBatch, currentDirectory, importVideos]);
+    }, [sinceDate, untilDate, skipDuplicates, addToCurrentBatch, currentDirectory, importVideos, importRaws]);
 
     useEffect(() => {
         fetchImportPreview();
@@ -115,7 +117,8 @@ function App() {
                     until: untilDate,
                     skip_duplicates: skipDuplicates,
                     target_directory: addToCurrentBatch ? currentDirectory : '',
-                    import_videos: importVideos
+                    import_videos: importVideos,
+                    import_raws: importRaws
                 })
             });
             const data = await response.json();
@@ -603,6 +606,16 @@ function App() {
                             <span>Import videos (.MP4)</span>
                         </label>
                     </div>
+                    <div className="checkbox-container">
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={importRaws}
+                                onChange={e => setImportRaws(e.target.checked)}
+                            />
+                            <span>Import RAWs (.CR3, .ORF)</span>
+                        </label>
+                    </div>
 
                     {/* Import Preview */}
                     {isLoadingPreview ? (
@@ -647,6 +660,12 @@ function App() {
                                         <div className="preview-stat">
                                             <span className="preview-label">Will skip (videos):</span>
                                             <span className="preview-value">{importPreview.skipped_videos}</span>
+                                        </div>
+                                    )}
+                                    {importPreview.skipped_raws > 0 && (
+                                        <div className="preview-stat">
+                                            <span className="preview-label">Will skip (RAWs):</span>
+                                            <span className="preview-value">{importPreview.skipped_raws}</span>
                                         </div>
                                     )}
                                     <div className="preview-stat">

@@ -4,7 +4,7 @@ A web-based application for importing photos from your camera's SD card, reviewi
 
 ## Features
 
-- **Import from SD Card**: Automatically detects and imports JPEG photos from Canon (DCIM/100CANON) and Olympus (DCIM/100OLYMP) cameras
+- **Import from SD Card**: Automatically detects and imports JPEG photos from Canon (DCIM/100CANON) and Olympus/OM System (DCIM/100OLYMP, DCIM/100OMSYS) cameras
 - **Photo Review**: Navigate through imported photos with keyboard shortcuts
 - **Smart Selection**: Mark photos for export with visual feedback
 - **Pin & Compare**: Pin one photo to compare side-by-side with others
@@ -177,7 +177,7 @@ Supports cameras whose SD cards follow the DCIM convention with brand-specific f
 | Brand   | DCIM folders        | RAW extension |
 | ------- | ------------------- | ------------- |
 | Canon   | `100CANON`, `101CANON`, … | `.CR3` |
-| Olympus | `100OLYMP`, `101OLYMP`, … | `.ORF` |
+| Olympus | `100OLYMP`, `100OMSYS`, … | `.ORF` |
 
 ### Filename Collision Prevention
 To prevent collisions when multiple folders have files with the same name (e.g., `IMG_0001.JPG` in both `100CANON` and `101CANON`), the app automatically prefixes filenames with the numeric part of their source directory (e.g., `100_IMG_0001.JPG`).
