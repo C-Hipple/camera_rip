@@ -47,7 +47,7 @@ cd frontend && npx react-scripts test --watchAll=false  # Frontend tests
 - **Photo storage:** `~/Pictures/photos/{timestamp-session}/` with a `selected/` subfolder and `selected/raw/` for raw files (CR3, ORF, etc.)
 - **Thumbnail cache:** `~/Pictures/photos/.thumbnails/{session}/` — generated async by a 20-worker pool at 200x200px
 - **Filename prefixes:** Files are prefixed with their DCIM source folder number (e.g., `100_IMG_0001.JPG` from `100CANON/` or `100OLYMP/`) to prevent collisions across multiple DCIM folders
-- **Device detection:** Looks for mounted volumes at `/Volumes` (macOS) or `/media` (Linux), then scans for supported camera DCIM folders (Canon `*CANON`, Olympus `*OLYMP`)
+- **Device detection:** Looks for mounted volumes at `/Volumes` (macOS) or `/media` (Linux), then scans for supported camera DCIM folders (Canon `*CANON`, Olympus `*OLYMP` and `*OMSYS`)
 - **Brand registry:** The `supportedBrands` table near the top of `main.go` pairs each DCIM folder suffix with its RAW extension. Add a row to support a new brand.
 - **Server port:** 5001
 

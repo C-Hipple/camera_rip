@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"embed"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"io"
@@ -41,6 +44,7 @@ type cameraBrand struct {
 var supportedBrands = []cameraBrand{
 	{suffix: "CANON", rawExt: ".CR3"},
 	{suffix: "OLYMP", rawExt: ".ORF"},
+	{suffix: "OMSYS", rawExt: ".ORF"},
 }
 
 func detectCameraBrand(folderName string) *cameraBrand {
@@ -61,6 +65,116 @@ func isRawFile(name string) bool {
 		}
 	}
 	return false
+}
+
+// extractEmbeddedJPEG returns the embedded JPEG preview bytes from a RAW file.
+//
+// Strategy:
+//   - TIFF-based RAWs (ORF, etc.): parse TIFF IFDs and use tags 0x0201/0x0202
+//     (JPEGInterchangeFormat / Length) for exact offset and length. This avoids
+//     including raw sensor data that follows the JPEG in the file.
+//   - ISOBMFF-based RAWs (CR3, etc.): scan for all JPEG SOI markers and return
+//     the largest segment bounded by the next SOI (or EOF).
+func extractEmbeddedJPEG(rawPath string) ([]byte, error) {
+	data, err := os.ReadFile(rawPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < 8 {
+		return nil, fmt.Errorf("file too small: %s", rawPath)
+	}
+
+	// TIFF magic: "II" (little-endian) or "MM" (big-endian)
+	if (data[0] == 'I' && data[1] == 'I') || (data[0] == 'M' && data[1] == 'M') {
+		if j, err := tiffExtractJPEG(data); err == nil {
+			return j, nil
+		}
+	}
+
+	return scanExtractJPEG(data, rawPath)
+}
+
+// tiffExtractJPEG walks TIFF IFD chains looking for tags 0x0201/0x0202 that
+// point to an embedded JPEG preview (standard in EXIF / Olympus ORF IFD1).
+func tiffExtractJPEG(data []byte) ([]byte, error) {
+	var bo binary.ByteOrder
+	if data[0] == 'I' {
+		bo = binary.LittleEndian
+	} else {
+		bo = binary.BigEndian
+	}
+	if bo.Uint16(data[2:]) != 42 {
+		return nil, fmt.Errorf("not a TIFF file")
+	}
+
+	ifdOff := bo.Uint32(data[4:])
+	for ifdOff != 0 && int(ifdOff)+2 <= len(data) {
+		n := int(bo.Uint16(data[ifdOff:]))
+		base := int(ifdOff) + 2
+		var jpegOff, jpegLen uint32
+		for i := 0; i < n; i++ {
+			e := base + i*12
+			if e+12 > len(data) {
+				break
+			}
+			tag := bo.Uint16(data[e:])
+			val := bo.Uint32(data[e+8:])
+			switch tag {
+			case 0x0201:
+				jpegOff = val
+			case 0x0202:
+				jpegLen = val
+			}
+		}
+		if jpegOff > 0 && jpegLen > 0 && int(jpegOff)+int(jpegLen) <= len(data) {
+			return data[jpegOff : jpegOff+jpegLen], nil
+		}
+		// Follow linked-list to next IFD
+		nextOff := base + n*12
+		if nextOff+4 > len(data) {
+			break
+		}
+		ifdOff = bo.Uint32(data[nextOff:])
+	}
+	return nil, fmt.Errorf("JPEG offset/length tags not found in TIFF IFDs")
+}
+
+// scanExtractJPEG finds the largest JPEG segment in arbitrary binary data by
+// locating all SOI markers and bounding each segment by the next SOI (or EOF).
+// Used for ISOBMFF-based RAWs (CR3) where TIFF parsing doesn't apply.
+func scanExtractJPEG(data []byte, rawPath string) ([]byte, error) {
+	soi := []byte{0xFF, 0xD8, 0xFF}
+	eoi := []byte{0xFF, 0xD9}
+
+	var starts []int
+	for off := 0; off+3 <= len(data); {
+		idx := bytes.Index(data[off:], soi)
+		if idx < 0 {
+			break
+		}
+		starts = append(starts, off+idx)
+		off = off + idx + 1
+	}
+
+	var best []byte
+	for i, start := range starts {
+		bound := len(data)
+		if i+1 < len(starts) {
+			bound = starts[i+1]
+		}
+		eoiIdx := bytes.LastIndex(data[start:bound], eoi)
+		if eoiIdx < 3 {
+			continue
+		}
+		seg := data[start : start+eoiIdx+2]
+		if len(seg) > len(best) {
+			best = seg
+		}
+	}
+	if len(best) == 0 {
+		return nil, fmt.Errorf("no embedded JPEG found in %s", rawPath)
+	}
+	return best, nil
 }
 
 // rawAlreadyExported returns true if a raw file with the given base name (any supported
@@ -183,15 +297,21 @@ func getPhotosHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var photos []string
+	var rawFiles []string
 	for _, file := range files {
-		if !file.IsDir() {
+		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
 			lowerName := strings.ToLower(file.Name())
 			if strings.HasSuffix(lowerName, ".png") || strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") || strings.HasSuffix(lowerName, ".gif") {
-				if !strings.HasPrefix(file.Name(), "._") {
-					photos = append(photos, file.Name())
-				}
+				photos = append(photos, file.Name())
+			} else if isRawFile(file.Name()) {
+				rawFiles = append(rawFiles, file.Name())
 			}
 		}
+	}
+
+	// If the folder contains only RAW files (no viewable images), expose the RAWs directly.
+	if len(photos) == 0 {
+		photos = rawFiles
 	}
 
 	sort.Strings(photos)
@@ -230,15 +350,20 @@ func getSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var photos []string
+	var rawFiles []string
 	for _, file := range files {
-		if !file.IsDir() {
+		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
 			lowerName := strings.ToLower(file.Name())
 			if strings.HasSuffix(lowerName, ".png") || strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") || strings.HasSuffix(lowerName, ".gif") {
-				if !strings.HasPrefix(file.Name(), "._") {
-					photos = append(photos, file.Name())
-				}
+				photos = append(photos, file.Name())
+			} else if isRawFile(file.Name()) {
+				rawFiles = append(rawFiles, file.Name())
 			}
 		}
+	}
+
+	if len(photos) == 0 {
+		photos = rawFiles
 	}
 
 	sort.Strings(photos)
@@ -335,6 +460,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		SkipDuplicates  bool   `json:"skip_duplicates"`
 		TargetDirectory string `json:"target_directory"`
 		ImportVideos    bool   `json:"import_videos"`
+		ImportRaws      bool   `json:"import_raws"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil && err != io.EOF {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -428,10 +554,12 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		file := fileEntry.file
 		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
 			lowerName := strings.ToLower(file.Name())
-			// Process .jpg files always, and .mp4 files only if import_videos is enabled
+			// Process .jpg files always, and .mp4/.raw files only if enabled
 			isJpg := strings.HasSuffix(lowerName, ".jpg")
 			isMp4 := strings.HasSuffix(lowerName, ".mp4")
-			if !isJpg && (!isMp4 || !data.ImportVideos) {
+			isRaw := isRawFile(file.Name())
+
+			if !isJpg && (!isMp4 || !data.ImportVideos) && (!isRaw || !data.ImportRaws) {
 				continue
 			}
 
@@ -499,8 +627,7 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			copiedCount++
-			// Only add image files to copiedFiles for thumbnail generation
-			if isJpg {
+			if isJpg || isRaw {
 				copiedFiles = append(copiedFiles, destFilename)
 			}
 		}
@@ -561,6 +688,7 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		SkipDuplicates  bool   `json:"skip_duplicates"`
 		TargetDirectory string `json:"target_directory"`
 		ImportVideos    bool   `json:"import_videos"`
+		ImportRaws      bool   `json:"import_raws"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil && err != io.EOF {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -653,6 +781,7 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 	skippedDuplicates := 0
 	skippedByDate := 0
 	skippedVideos := 0
+	skippedRaws := 0
 	// dailyBreakdown maps "YYYY-MM-DD" -> count of files that will be imported that day
 	dailyBreakdown := make(map[string]int)
 
@@ -662,16 +791,20 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 			lowerName := strings.ToLower(file.Name())
 			isJpg := strings.HasSuffix(lowerName, ".jpg")
 			isMp4 := strings.HasSuffix(lowerName, ".mp4")
+			isRaw := isRawFile(file.Name())
 
 			// Count all potential files
-			if isJpg || isMp4 {
+			if isJpg || isMp4 || isRaw {
 				totalFiles++
 			}
 
-			// Skip if not jpg and not importing videos
-			if !isJpg && (!isMp4 || !data.ImportVideos) {
+			// Skip if not jpg and not importing videos/raws
+			if !isJpg && (!isMp4 || !data.ImportVideos) && (!isRaw || !data.ImportRaws) {
 				if isMp4 {
 					skippedVideos++
+				}
+				if isRaw {
+					skippedRaws++
 				}
 				continue
 			}
@@ -739,6 +872,7 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 		"skipped_duplicates": skippedDuplicates,
 		"skipped_by_date":    skippedByDate,
 		"skipped_videos":     skippedVideos,
+		"skipped_raws":       skippedRaws,
 		"usb_connected":      true,
 		"daily_breakdown":    dailyBreakdown,
 	})
@@ -1299,15 +1433,27 @@ func generateThumbnail(directory, filename string) error {
 	}
 
 	originalPhotoPath := filepath.Join(photoBaseDir, directory, filename)
-	file, err := os.Open(originalPhotoPath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
 
-	img, _, err := image.Decode(file)
-	if err != nil {
-		return err
+	var img image.Image
+	if isRawFile(filename) {
+		jpegData, err := extractEmbeddedJPEG(originalPhotoPath)
+		if err != nil {
+			return fmt.Errorf("extracting embedded JPEG from %s: %w", filename, err)
+		}
+		img, err = jpeg.Decode(bytes.NewReader(jpegData))
+		if err != nil {
+			return fmt.Errorf("decoding embedded JPEG from %s: %w", filename, err)
+		}
+	} else {
+		file, err := os.Open(originalPhotoPath)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		img, _, err = image.Decode(file)
+		if err != nil {
+			return err
+		}
 	}
 
 	thumb := resize.Thumbnail(uint(thumbnailSize), uint(thumbnailSize), img, resize.Lanczos3)
@@ -1363,6 +1509,19 @@ func servePhotoHandler(w http.ResponseWriter, r *http.Request) {
 	directory := parts[0]
 	filename := parts[1]
 	photoPath := filepath.Join(photoBaseDir, directory, filename)
+
+	if isRawFile(filename) {
+		jpegData, err := extractEmbeddedJPEG(photoPath)
+		if err != nil {
+			http.Error(w, "Failed to extract preview from RAW file", http.StatusInternalServerError)
+			log.Printf("Error extracting JPEG from RAW %s: %v", photoPath, err)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(jpegData)
+		return
+	}
+
 	http.ServeFile(w, r, photoPath)
 }
 
@@ -1378,16 +1537,30 @@ func serveThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 	thumbnailDir := filepath.Join(thumbnailCacheDir, directory)
 	thumbnailPath := filepath.Join(thumbnailDir, filename)
 
-	// Check if thumbnail already exists
-	if _, err := os.Stat(thumbnailPath); err == nil {
-		http.ServeFile(w, r, thumbnailPath)
-		return
+	// Generate thumbnail on-demand if it doesn't exist
+	if _, err := os.Stat(thumbnailPath); err != nil {
+		if err := generateThumbnail(directory, filename); err != nil {
+			http.Error(w, "Failed to generate thumbnail", http.StatusInternalServerError)
+			log.Printf("Error generating thumbnail for %s/%s: %v", directory, filename, err)
+			return
+		}
 	}
 
-	// Generate thumbnail on-demand if it doesn't exist
-	if err := generateThumbnail(directory, filename); err != nil {
-		http.Error(w, "Failed to generate thumbnail", http.StatusInternalServerError)
-		log.Printf("Error generating thumbnail for %s/%s: %v", directory, filename, err)
+	// RAW thumbnails are JPEG bytes stored under the raw filename — set content type explicitly.
+	if isRawFile(filename) {
+		f, err := os.Open(thumbnailPath)
+		if err != nil {
+			http.Error(w, "Failed to serve thumbnail", http.StatusInternalServerError)
+			return
+		}
+		defer f.Close()
+		stat, err := f.Stat()
+		if err != nil {
+			http.Error(w, "Failed to stat thumbnail", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		http.ServeContent(w, r, filename+".jpg", stat.ModTime(), f)
 		return
 	}
 
