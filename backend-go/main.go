@@ -188,6 +188,26 @@ func rawAlreadyExported(dir, baseName string) bool {
 	return false
 }
 
+// safePhotoPath joins user-supplied path elements (e.g. a directory or filename
+// from a request) under photoBaseDir and verifies the cleaned result stays
+// within photoBaseDir. It guards every handler that builds a filesystem path
+// from request input against traversal via "..". Returns the cleaned absolute
+// path, or an error if the result would escape photoBaseDir.
+func safePhotoPath(elem ...string) (string, error) {
+	base, err := filepath.Abs(photoBaseDir)
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(filepath.Join(append([]string{base}, elem...)...))
+	if err != nil {
+		return "", err
+	}
+	if abs != base && !strings.HasPrefix(abs, base+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path escapes photo base directory")
+	}
+	return abs, nil
+}
+
 type spaFileSystem struct {
 	root http.FileSystem
 }
@@ -289,7 +309,11 @@ func getPhotosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetDir := filepath.Join(photoBaseDir, directory)
+	targetDir, err := safePhotoPath(directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	files, err := ioutil.ReadDir(targetDir)
 	if err != nil {
 		http.Error(w, "Failed to read photo directory", http.StatusInternalServerError)
@@ -335,7 +359,11 @@ func getSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	selectedDir := filepath.Join(photoBaseDir, directory, "selected")
+	selectedDir, err := safePhotoPath(directory, "selected")
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	files, err := ioutil.ReadDir(selectedDir)
 	if err != nil {
 		// If the directory doesn't exist, it just means no photos have been selected yet.
@@ -388,7 +416,11 @@ func saveSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceDir := filepath.Join(photoBaseDir, data.Directory)
+	sourceDir, err := safePhotoPath(data.Directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	destinationDir := filepath.Join(sourceDir, "selected")
 
 	if err := os.MkdirAll(destinationDir, 0755); err != nil {
@@ -397,6 +429,10 @@ func saveSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, filename := range data.SelectedFiles {
+		if strings.Contains(filename, "..") || strings.ContainsAny(filename, `/\`) {
+			log.Printf("Skipping invalid filename: %s", filename)
+			continue
+		}
 		sourcePath := filepath.Join(sourceDir, filename)
 		destinationPath := filepath.Join(destinationDir, filename)
 
@@ -503,7 +539,11 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	var destinationDir string
 	var isNewBatch bool
 	if data.TargetDirectory != "" {
-		destinationDir = filepath.Join(photoBaseDir, data.TargetDirectory)
+		destinationDir, err = safePhotoPath(data.TargetDirectory)
+		if err != nil {
+			http.Error(w, "Invalid target directory", http.StatusBadRequest)
+			return
+		}
 		isNewBatch = false
 		// Verify target directory exists
 		if _, err := os.Stat(destinationDir); os.IsNotExist(err) {
@@ -744,7 +784,11 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 	// Determine destination directory for duplicate checking
 	var destinationDir string
 	if data.TargetDirectory != "" {
-		destinationDir = filepath.Join(photoBaseDir, data.TargetDirectory)
+		destinationDir, err = safePhotoPath(data.TargetDirectory)
+		if err != nil {
+			http.Error(w, "Invalid target directory", http.StatusBadRequest)
+			return
+		}
 		// Verify target directory exists
 		if _, err := os.Stat(destinationDir); os.IsNotExist(err) {
 			http.Error(w, "Target directory does not exist", http.StatusBadRequest)
@@ -905,7 +949,11 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceDir := filepath.Join(photoBaseDir, data.Directory)
+	sourceDir, err := safePhotoPath(data.Directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	selectedDir := filepath.Join(sourceDir, "selected")
 	rawDestDir := filepath.Join(selectedDir, "raw")
 
@@ -1019,7 +1067,15 @@ func exportRawSingleFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceDir := filepath.Join(photoBaseDir, data.Directory)
+	sourceDir, err := safePhotoPath(data.Directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
+	if strings.Contains(data.Filename, "..") || strings.ContainsAny(data.Filename, `/\`) {
+		http.Error(w, "Invalid filename", http.StatusBadRequest)
+		return
+	}
 	selectedDir := filepath.Join(sourceDir, "selected")
 	rawDestDir := filepath.Join(selectedDir, "raw")
 
@@ -1090,7 +1146,11 @@ func exportStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceDir := filepath.Join(photoBaseDir, directory)
+	sourceDir, err := safePhotoPath(directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	selectedDir := filepath.Join(sourceDir, "selected")
 	rawDir := filepath.Join(selectedDir, "raw")
 
@@ -1260,7 +1320,12 @@ func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetDir := filepath.Join(photoBaseDir, data.Directory)
+	// Security: ensure the target directory stays within the photo base directory.
+	targetDir, err := safePhotoPath(data.Directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	deletedCount := 0
 	notFoundCount := 0
 	errorCount := 0
@@ -1274,27 +1339,6 @@ func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		filePath := filepath.Join(targetDir, filename)
-
-		// Verify the file is actually in the target directory
-		absPath, err := filepath.Abs(filePath)
-		if err != nil {
-			log.Printf("Failed to get absolute path for %s: %v", filePath, err)
-			errorCount++
-			continue
-		}
-
-		absTargetDir, err := filepath.Abs(targetDir)
-		if err != nil {
-			log.Printf("Failed to get absolute path for target dir: %v", err)
-			errorCount++
-			continue
-		}
-
-		if !strings.HasPrefix(absPath, absTargetDir) {
-			log.Printf("Security check failed: file path %s is outside target directory", absPath)
-			errorCount++
-			continue
-		}
 
 		if err := os.Remove(filePath); err != nil {
 			if os.IsNotExist(err) {
@@ -1508,7 +1552,11 @@ func servePhotoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	directory := parts[0]
 	filename := parts[1]
-	photoPath := filepath.Join(photoBaseDir, directory, filename)
+	photoPath, err := safePhotoPath(directory, filename)
+	if err != nil {
+		http.Error(w, "Invalid photo path", http.StatusBadRequest)
+		return
+	}
 
 	if isRawFile(filename) {
 		jpegData, err := extractEmbeddedJPEG(photoPath)
@@ -1533,6 +1581,12 @@ func serveThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	directory := parts[0]
 	filename := parts[1]
+
+	// Guard against traversal in the directory/filename segments.
+	if strings.Contains(directory, "..") || strings.Contains(filename, "..") {
+		http.Error(w, "Invalid thumbnail path", http.StatusBadRequest)
+		return
+	}
 
 	thumbnailDir := filepath.Join(thumbnailCacheDir, directory)
 	thumbnailPath := filepath.Join(thumbnailDir, filename)
