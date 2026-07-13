@@ -587,94 +587,92 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Skip duplicates enabled: found %d already imported files", len(importedFiles))
 	}
 
-	copiedCount := 0
+	// Pre-pass: determine exactly which files will be copied so we can report a
+	// total up front and stream per-file progress during the copy pass.
+	type fileToCopy struct {
+		src      string
+		destName string
+		isMedia  bool // jpg or raw — included in thumbnail generation
+	}
+	var toCopy []fileToCopy
 	skippedDuplicates := 0
-	var copiedFiles []string
 	for _, fileEntry := range allFiles {
 		file := fileEntry.file
-		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
-			lowerName := strings.ToLower(file.Name())
-			// Process .jpg files always, and .mp4/.raw files only if enabled
-			isJpg := strings.HasSuffix(lowerName, ".jpg")
-			isMp4 := strings.HasSuffix(lowerName, ".mp4")
-			isRaw := isRawFile(file.Name())
+		if file.IsDir() || strings.HasPrefix(file.Name(), "._") {
+			continue
+		}
+		lowerName := strings.ToLower(file.Name())
+		// Process .jpg files always, and .mp4/.raw files only if enabled
+		isJpg := strings.HasSuffix(lowerName, ".jpg")
+		isMp4 := strings.HasSuffix(lowerName, ".mp4")
+		isRaw := isRawFile(file.Name())
 
-			if !isJpg && (!isMp4 || !data.ImportVideos) && (!isRaw || !data.ImportRaws) {
-				continue
-			}
+		if !isJpg && (!isMp4 || !data.ImportVideos) && (!isRaw || !data.ImportRaws) {
+			continue
+		}
 
-			sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
-			sourceFile := filepath.Join(sourceDir, file.Name())
+		sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
+		sourceFile := filepath.Join(sourceDir, file.Name())
 
-			if !sinceDate.IsZero() || !untilDate.IsZero() {
-				fileInfo, err := os.Stat(sourceFile)
-				if err != nil {
-					log.Printf("Failed to get file info: %v", err)
-					continue
-				}
-				modTime := fileInfo.ModTime()
-				if !sinceDate.IsZero() && modTime.Before(sinceDate) {
-					continue
-				}
-				if !untilDate.IsZero() && !modTime.Before(untilDate) {
-					continue
-				}
-			}
-
-			dirPrefix := getDCIMPrefix(fileEntry.dir)
-			destFilename := file.Name()
-			if dirPrefix != "" {
-				destFilename = dirPrefix + "_" + file.Name()
-			}
-
-			// Check if file has already been imported to any directory (O(1) lookup)
-			if data.SkipDuplicates && importedFiles[destFilename] {
-				skippedDuplicates++
-				continue
-			}
-
-			// Create destination directory on first file to be copied
-			if !destinationDirCreated {
-				if err := os.MkdirAll(destinationDir, 0755); err != nil {
-					log.Printf("Failed to create destination directory: %v", err)
-					http.Error(w, "Could not create destination directory", http.StatusInternalServerError)
-					return
-				}
-				destinationDirCreated = true
-			}
-
-			destinationFile := filepath.Join(destinationDir, destFilename)
-			if _, err := os.Stat(destinationFile); err == nil {
-				continue // Skip if file already exists in current destination
-			}
-
-			source, err := os.Open(sourceFile)
+		if !sinceDate.IsZero() || !untilDate.IsZero() {
+			fileInfo, err := os.Stat(sourceFile)
 			if err != nil {
-				log.Printf("Failed to open source file: %v", err)
+				log.Printf("Failed to get file info: %v", err)
 				continue
 			}
-			defer source.Close()
+			modTime := fileInfo.ModTime()
+			if !sinceDate.IsZero() && modTime.Before(sinceDate) {
+				continue
+			}
+			if !untilDate.IsZero() && !modTime.Before(untilDate) {
+				continue
+			}
+		}
 
-			destination, err := os.Create(destinationFile)
-			if err != nil {
-				log.Printf("Failed to create destination file: %v", err)
-				continue
-			}
-			defer destination.Close()
+		dirPrefix := getDCIMPrefix(fileEntry.dir)
+		destFilename := file.Name()
+		if dirPrefix != "" {
+			destFilename = dirPrefix + "_" + file.Name()
+		}
 
-			if _, err := io.Copy(destination, source); err != nil {
-				log.Printf("Failed to copy file: %v", err)
+		// Check if file has already been imported to any directory (O(1) lookup)
+		if data.SkipDuplicates && importedFiles[destFilename] {
+			skippedDuplicates++
+			continue
+		}
+
+		// Skip if the file already exists in an existing destination directory.
+		if destinationDirCreated {
+			if _, err := os.Stat(filepath.Join(destinationDir, destFilename)); err == nil {
 				continue
 			}
-			copiedCount++
-			if isJpg || isRaw {
-				copiedFiles = append(copiedFiles, destFilename)
-			}
+		}
+
+		toCopy = append(toCopy, fileToCopy{src: sourceFile, destName: destFilename, isMedia: isJpg || isRaw})
+	}
+
+	// Everything below streams newline-delimited JSON (NDJSON) progress events so
+	// the client can show a live progress bar. Once the first line is written the
+	// HTTP status is fixed at 200, so all hard failures above use http.Error.
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	flusher, _ := w.(http.Flusher)
+	enc := json.NewEncoder(w)
+	emit := func(event map[string]interface{}) {
+		if err := enc.Encode(event); err != nil {
+			return
+		}
+		if flusher != nil {
+			flusher.Flush()
 		}
 	}
 
-	// Handle case where no files were copied
-	if copiedCount == 0 {
+	dirName := filepath.Base(destinationDir)
+	total := len(toCopy)
+
+	// Nothing to copy: report why and stop (no directory is created).
+	if total == 0 {
 		var message string
 		if !sinceDate.IsZero() || !untilDate.IsZero() {
 			message = "No new files found in the selected date range"
@@ -683,17 +681,51 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			message = "No files found to import."
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message":       message,
-			"new_directory": nil,
+		emit(map[string]interface{}{
+			"type":               "done",
+			"message":            message,
+			"new_directory":      nil,
+			"copied":             0,
+			"skipped_duplicates": skippedDuplicates,
 		})
 		return
 	}
 
+	// Create the destination directory now that we know files will be copied.
+	if !destinationDirCreated {
+		if err := os.MkdirAll(destinationDir, 0755); err != nil {
+			log.Printf("Failed to create destination directory: %v", err)
+			emit(map[string]interface{}{"type": "error", "message": "Could not create destination directory"})
+			return
+		}
+		destinationDirCreated = true
+	}
+
+	emit(map[string]interface{}{"type": "start", "total": total})
+
+	// Throttle progress events to at most ~100 over the whole import.
+	step := total / 100
+	if step < 1 {
+		step = 1
+	}
+
+	copiedCount := 0
+	var copiedFiles []string
+	for _, item := range toCopy {
+		if err := copyFile(item.src, filepath.Join(destinationDir, item.destName)); err != nil {
+			log.Printf("Failed to copy %s: %v", item.src, err)
+			continue
+		}
+		copiedCount++
+		if item.isMedia {
+			copiedFiles = append(copiedFiles, item.destName)
+		}
+		if copiedCount == total || copiedCount%step == 0 {
+			emit(map[string]interface{}{"type": "progress", "copied": copiedCount, "total": total})
+		}
+	}
+
 	// Start async thumbnail generation for imported photos
-	dirName := filepath.Base(destinationDir)
 	go func() {
 		log.Printf("Starting background thumbnail generation for imported directory: %s (%d photos)", dirName, len(copiedFiles))
 		preGenerateThumbnails(dirName, copiedFiles)
@@ -708,17 +740,41 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		message += " Skipped " + strconv.Itoa(skippedDuplicates) + " already imported."
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	var newDirectory interface{}
 	if isNewBatch {
 		newDirectory = dirName
 	} else {
 		newDirectory = nil
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":       message,
-		"new_directory": newDirectory,
+	emit(map[string]interface{}{
+		"type":               "done",
+		"message":            message,
+		"new_directory":      newDirectory,
+		"copied":             copiedCount,
+		"skipped_duplicates": skippedDuplicates,
 	})
+}
+
+// copyFile copies a single file from src to dst, closing both handles before it
+// returns. Using this (rather than inline defers inside a copy loop) keeps at
+// most one source/destination file descriptor open at a time during an import.
+func copyFile(src, dst string) error {
+	source, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	destination, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destination.Close()
+
+	if _, err := io.Copy(destination, source); err != nil {
+		return err
+	}
+	return nil
 }
 
 func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
