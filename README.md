@@ -159,6 +159,16 @@ The project includes a Makefile with convenient commands:
 - **`make frontend`**: Build only the frontend
 - **`make clean`**: Remove all build artifacts
 
+## Manual Testing
+
+Camera Rip reads from a physical SD card and writes to your photo library, which
+makes it awkward to test by hand. [`doc/manual-testing.md`](doc/manual-testing.md)
+walks through simulating a Canon SD card on disk and running the server against a
+throwaway `HOME`, then exercising every endpoint (import with live progress,
+previews, RAW export, deletion, and the path-traversal security guard) via `curl`
+and an optional headless-browser check. Follow it after backend or frontend
+changes to verify the full import → review → export → delete lifecycle.
+
 ## Continuous Integration
 
 The project includes GitHub Actions CI that automatically:
