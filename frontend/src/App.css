@@ -257,6 +257,29 @@
   text-align: center;
 }
 
+.rename-button {
+  padding: 8px 16px;
+  font-size: 0.95rem;
+  background-color: #83a598;
+  /* Gruvbox Blue */
+  color: #282828;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: bold;
+  width: 100%;
+  transition: background-color 0.2s;
+}
+
+.rename-button:hover:not(:disabled) {
+  background-color: #458588;
+}
+
+.rename-button:disabled {
+  background-color: #7c6f64;
+  cursor: not-allowed;
+}
+
 .delete-button {
   padding: 10px 16px;
   font-size: 0.95rem;

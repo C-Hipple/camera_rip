@@ -249,6 +249,7 @@ func main() {
 	http.HandleFunc("/api/selected-photos", corsHandler(getSelectedPhotosHandler))
 	http.HandleFunc("/api/delete-imported", corsHandler(deleteImportedHandler))
 	http.HandleFunc("/api/delete-photos", corsHandler(deletePhotosHandler))
+	http.HandleFunc("/api/rename-directory", corsHandler(renameDirectoryHandler))
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
@@ -300,6 +301,75 @@ func listDirectoriesHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(dirs)
+}
+
+// validDirName reports whether name is usable as a photo session directory
+// name: a single path segment that is not hidden (which also excludes the
+// .thumbnails cache directory).
+func validDirName(name string) bool {
+	return name != "" && !strings.ContainsAny(name, `/\`) && !strings.HasPrefix(name, ".")
+}
+
+func renameDirectoryHandler(w http.ResponseWriter, r *http.Request) {
+	var data struct {
+		Directory string `json:"directory"`
+		NewName   string `json:"new_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	newName := strings.TrimSpace(data.NewName)
+	if !validDirName(data.Directory) || !validDirName(newName) {
+		http.Error(w, "Invalid directory name", http.StatusBadRequest)
+		return
+	}
+	if newName == data.Directory {
+		http.Error(w, "New name is the same as the current name", http.StatusBadRequest)
+		return
+	}
+
+	oldPath, err := safePhotoPath(data.Directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
+	newPath, err := safePhotoPath(newName)
+	if err != nil {
+		http.Error(w, "Invalid new directory name", http.StatusBadRequest)
+		return
+	}
+
+	if info, err := os.Stat(oldPath); err != nil || !info.IsDir() {
+		http.Error(w, "Directory not found", http.StatusNotFound)
+		return
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		http.Error(w, "A directory with that name already exists", http.StatusConflict)
+		return
+	}
+
+	if err := os.Rename(oldPath, newPath); err != nil {
+		log.Printf("Failed to rename directory %s to %s: %v", data.Directory, newName, err)
+		http.Error(w, "Failed to rename directory", http.StatusInternalServerError)
+		return
+	}
+
+	// Move the thumbnail cache along with the directory so existing thumbnails
+	// stay valid and never need to be regenerated after a rename.
+	oldThumbs := filepath.Join(thumbnailCacheDir, data.Directory)
+	newThumbs := filepath.Join(thumbnailCacheDir, newName)
+	if err := os.Rename(oldThumbs, newThumbs); err != nil && !os.IsNotExist(err) {
+		log.Printf("Failed to move thumbnail cache from %s to %s: %v", oldThumbs, newThumbs, err)
+	}
+
+	log.Printf("Renamed directory %s to %s", data.Directory, newName)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message":       "Renamed '" + data.Directory + "' to '" + newName + "'",
+		"new_directory": newName,
+	})
 }
 
 func getPhotosHandler(w http.ResponseWriter, r *http.Request) {
@@ -1523,11 +1593,23 @@ func findUSBMountPoint() string {
 	return ""
 }
 
+// thumbnailLocks serializes generation of the same thumbnail. The import
+// worker pool, the /api/photos worker pool, and on-demand /thumbnail/ requests
+// can all race to generate the same file; without this, concurrent writers
+// interleave on the same path and readers can be served a half-written JPEG.
+var thumbnailLocks sync.Map
+
 func generateThumbnail(directory, filename string) error {
 	thumbnailDir := filepath.Join(thumbnailCacheDir, directory)
 	thumbnailPath := filepath.Join(thumbnailDir, filename)
 
-	// Check if thumbnail already exists
+	lockAny, _ := thumbnailLocks.LoadOrStore(directory+"/"+filename, &sync.Mutex{})
+	lock := lockAny.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Check if thumbnail already exists (re-checked under the lock so a
+	// goroutine that waited on a concurrent generation returns immediately)
 	if _, err := os.Stat(thumbnailPath); err == nil {
 		return nil // Already exists
 	}
@@ -1562,13 +1644,22 @@ func generateThumbnail(directory, filename string) error {
 		return err
 	}
 
-	out, err := os.Create(thumbnailPath)
+	// Write to a temp file and rename so a concurrent /thumbnail/ request can
+	// never observe (and serve) a partially written thumbnail.
+	out, err := os.CreateTemp(thumbnailDir, "."+filename+".tmp")
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-
-	return jpeg.Encode(out, thumb, nil)
+	if err := jpeg.Encode(out, thumb, nil); err != nil {
+		out.Close()
+		os.Remove(out.Name())
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(out.Name())
+		return err
+	}
+	return os.Rename(out.Name(), thumbnailPath)
 }
 
 func preGenerateThumbnails(directory string, photos []string) {
