@@ -188,6 +188,26 @@ func rawAlreadyExported(dir, baseName string) bool {
 	return false
 }
 
+// safePhotoPath joins user-supplied path elements (e.g. a directory or filename
+// from a request) under photoBaseDir and verifies the cleaned result stays
+// within photoBaseDir. It guards every handler that builds a filesystem path
+// from request input against traversal via "..". Returns the cleaned absolute
+// path, or an error if the result would escape photoBaseDir.
+func safePhotoPath(elem ...string) (string, error) {
+	base, err := filepath.Abs(photoBaseDir)
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(filepath.Join(append([]string{base}, elem...)...))
+	if err != nil {
+		return "", err
+	}
+	if abs != base && !strings.HasPrefix(abs, base+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path escapes photo base directory")
+	}
+	return abs, nil
+}
+
 type spaFileSystem struct {
 	root http.FileSystem
 }
@@ -289,7 +309,11 @@ func getPhotosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetDir := filepath.Join(photoBaseDir, directory)
+	targetDir, err := safePhotoPath(directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	files, err := ioutil.ReadDir(targetDir)
 	if err != nil {
 		http.Error(w, "Failed to read photo directory", http.StatusInternalServerError)
@@ -335,7 +359,11 @@ func getSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	selectedDir := filepath.Join(photoBaseDir, directory, "selected")
+	selectedDir, err := safePhotoPath(directory, "selected")
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	files, err := ioutil.ReadDir(selectedDir)
 	if err != nil {
 		// If the directory doesn't exist, it just means no photos have been selected yet.
@@ -388,7 +416,11 @@ func saveSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceDir := filepath.Join(photoBaseDir, data.Directory)
+	sourceDir, err := safePhotoPath(data.Directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	destinationDir := filepath.Join(sourceDir, "selected")
 
 	if err := os.MkdirAll(destinationDir, 0755); err != nil {
@@ -397,6 +429,10 @@ func saveSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, filename := range data.SelectedFiles {
+		if strings.Contains(filename, "..") || strings.ContainsAny(filename, `/\`) {
+			log.Printf("Skipping invalid filename: %s", filename)
+			continue
+		}
 		sourcePath := filepath.Join(sourceDir, filename)
 		destinationPath := filepath.Join(destinationDir, filename)
 
@@ -503,7 +539,11 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	var destinationDir string
 	var isNewBatch bool
 	if data.TargetDirectory != "" {
-		destinationDir = filepath.Join(photoBaseDir, data.TargetDirectory)
+		destinationDir, err = safePhotoPath(data.TargetDirectory)
+		if err != nil {
+			http.Error(w, "Invalid target directory", http.StatusBadRequest)
+			return
+		}
 		isNewBatch = false
 		// Verify target directory exists
 		if _, err := os.Stat(destinationDir); os.IsNotExist(err) {
@@ -547,94 +587,92 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Skip duplicates enabled: found %d already imported files", len(importedFiles))
 	}
 
-	copiedCount := 0
+	// Pre-pass: determine exactly which files will be copied so we can report a
+	// total up front and stream per-file progress during the copy pass.
+	type fileToCopy struct {
+		src      string
+		destName string
+		isMedia  bool // jpg or raw — included in thumbnail generation
+	}
+	var toCopy []fileToCopy
 	skippedDuplicates := 0
-	var copiedFiles []string
 	for _, fileEntry := range allFiles {
 		file := fileEntry.file
-		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
-			lowerName := strings.ToLower(file.Name())
-			// Process .jpg files always, and .mp4/.raw files only if enabled
-			isJpg := strings.HasSuffix(lowerName, ".jpg")
-			isMp4 := strings.HasSuffix(lowerName, ".mp4")
-			isRaw := isRawFile(file.Name())
+		if file.IsDir() || strings.HasPrefix(file.Name(), "._") {
+			continue
+		}
+		lowerName := strings.ToLower(file.Name())
+		// Process .jpg files always, and .mp4/.raw files only if enabled
+		isJpg := strings.HasSuffix(lowerName, ".jpg")
+		isMp4 := strings.HasSuffix(lowerName, ".mp4")
+		isRaw := isRawFile(file.Name())
 
-			if !isJpg && (!isMp4 || !data.ImportVideos) && (!isRaw || !data.ImportRaws) {
-				continue
-			}
+		if !isJpg && (!isMp4 || !data.ImportVideos) && (!isRaw || !data.ImportRaws) {
+			continue
+		}
 
-			sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
-			sourceFile := filepath.Join(sourceDir, file.Name())
+		sourceDir := filepath.Join(usbMountPoint, "DCIM", fileEntry.dir)
+		sourceFile := filepath.Join(sourceDir, file.Name())
 
-			if !sinceDate.IsZero() || !untilDate.IsZero() {
-				fileInfo, err := os.Stat(sourceFile)
-				if err != nil {
-					log.Printf("Failed to get file info: %v", err)
-					continue
-				}
-				modTime := fileInfo.ModTime()
-				if !sinceDate.IsZero() && modTime.Before(sinceDate) {
-					continue
-				}
-				if !untilDate.IsZero() && !modTime.Before(untilDate) {
-					continue
-				}
-			}
-
-			dirPrefix := getDCIMPrefix(fileEntry.dir)
-			destFilename := file.Name()
-			if dirPrefix != "" {
-				destFilename = dirPrefix + "_" + file.Name()
-			}
-
-			// Check if file has already been imported to any directory (O(1) lookup)
-			if data.SkipDuplicates && importedFiles[destFilename] {
-				skippedDuplicates++
-				continue
-			}
-
-			// Create destination directory on first file to be copied
-			if !destinationDirCreated {
-				if err := os.MkdirAll(destinationDir, 0755); err != nil {
-					log.Printf("Failed to create destination directory: %v", err)
-					http.Error(w, "Could not create destination directory", http.StatusInternalServerError)
-					return
-				}
-				destinationDirCreated = true
-			}
-
-			destinationFile := filepath.Join(destinationDir, destFilename)
-			if _, err := os.Stat(destinationFile); err == nil {
-				continue // Skip if file already exists in current destination
-			}
-
-			source, err := os.Open(sourceFile)
+		if !sinceDate.IsZero() || !untilDate.IsZero() {
+			fileInfo, err := os.Stat(sourceFile)
 			if err != nil {
-				log.Printf("Failed to open source file: %v", err)
+				log.Printf("Failed to get file info: %v", err)
 				continue
 			}
-			defer source.Close()
+			modTime := fileInfo.ModTime()
+			if !sinceDate.IsZero() && modTime.Before(sinceDate) {
+				continue
+			}
+			if !untilDate.IsZero() && !modTime.Before(untilDate) {
+				continue
+			}
+		}
 
-			destination, err := os.Create(destinationFile)
-			if err != nil {
-				log.Printf("Failed to create destination file: %v", err)
-				continue
-			}
-			defer destination.Close()
+		dirPrefix := getDCIMPrefix(fileEntry.dir)
+		destFilename := file.Name()
+		if dirPrefix != "" {
+			destFilename = dirPrefix + "_" + file.Name()
+		}
 
-			if _, err := io.Copy(destination, source); err != nil {
-				log.Printf("Failed to copy file: %v", err)
+		// Check if file has already been imported to any directory (O(1) lookup)
+		if data.SkipDuplicates && importedFiles[destFilename] {
+			skippedDuplicates++
+			continue
+		}
+
+		// Skip if the file already exists in an existing destination directory.
+		if destinationDirCreated {
+			if _, err := os.Stat(filepath.Join(destinationDir, destFilename)); err == nil {
 				continue
 			}
-			copiedCount++
-			if isJpg || isRaw {
-				copiedFiles = append(copiedFiles, destFilename)
-			}
+		}
+
+		toCopy = append(toCopy, fileToCopy{src: sourceFile, destName: destFilename, isMedia: isJpg || isRaw})
+	}
+
+	// Everything below streams newline-delimited JSON (NDJSON) progress events so
+	// the client can show a live progress bar. Once the first line is written the
+	// HTTP status is fixed at 200, so all hard failures above use http.Error.
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	flusher, _ := w.(http.Flusher)
+	enc := json.NewEncoder(w)
+	emit := func(event map[string]interface{}) {
+		if err := enc.Encode(event); err != nil {
+			return
+		}
+		if flusher != nil {
+			flusher.Flush()
 		}
 	}
 
-	// Handle case where no files were copied
-	if copiedCount == 0 {
+	dirName := filepath.Base(destinationDir)
+	total := len(toCopy)
+
+	// Nothing to copy: report why and stop (no directory is created).
+	if total == 0 {
 		var message string
 		if !sinceDate.IsZero() || !untilDate.IsZero() {
 			message = "No new files found in the selected date range"
@@ -643,17 +681,51 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			message = "No files found to import."
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message":       message,
-			"new_directory": nil,
+		emit(map[string]interface{}{
+			"type":               "done",
+			"message":            message,
+			"new_directory":      nil,
+			"copied":             0,
+			"skipped_duplicates": skippedDuplicates,
 		})
 		return
 	}
 
+	// Create the destination directory now that we know files will be copied.
+	if !destinationDirCreated {
+		if err := os.MkdirAll(destinationDir, 0755); err != nil {
+			log.Printf("Failed to create destination directory: %v", err)
+			emit(map[string]interface{}{"type": "error", "message": "Could not create destination directory"})
+			return
+		}
+		destinationDirCreated = true
+	}
+
+	emit(map[string]interface{}{"type": "start", "total": total})
+
+	// Throttle progress events to at most ~100 over the whole import.
+	step := total / 100
+	if step < 1 {
+		step = 1
+	}
+
+	copiedCount := 0
+	var copiedFiles []string
+	for _, item := range toCopy {
+		if err := copyFile(item.src, filepath.Join(destinationDir, item.destName)); err != nil {
+			log.Printf("Failed to copy %s: %v", item.src, err)
+			continue
+		}
+		copiedCount++
+		if item.isMedia {
+			copiedFiles = append(copiedFiles, item.destName)
+		}
+		if copiedCount == total || copiedCount%step == 0 {
+			emit(map[string]interface{}{"type": "progress", "copied": copiedCount, "total": total})
+		}
+	}
+
 	// Start async thumbnail generation for imported photos
-	dirName := filepath.Base(destinationDir)
 	go func() {
 		log.Printf("Starting background thumbnail generation for imported directory: %s (%d photos)", dirName, len(copiedFiles))
 		preGenerateThumbnails(dirName, copiedFiles)
@@ -668,17 +740,41 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 		message += " Skipped " + strconv.Itoa(skippedDuplicates) + " already imported."
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	var newDirectory interface{}
 	if isNewBatch {
 		newDirectory = dirName
 	} else {
 		newDirectory = nil
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":       message,
-		"new_directory": newDirectory,
+	emit(map[string]interface{}{
+		"type":               "done",
+		"message":            message,
+		"new_directory":      newDirectory,
+		"copied":             copiedCount,
+		"skipped_duplicates": skippedDuplicates,
 	})
+}
+
+// copyFile copies a single file from src to dst, closing both handles before it
+// returns. Using this (rather than inline defers inside a copy loop) keeps at
+// most one source/destination file descriptor open at a time during an import.
+func copyFile(src, dst string) error {
+	source, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	destination, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destination.Close()
+
+	if _, err := io.Copy(destination, source); err != nil {
+		return err
+	}
+	return nil
 }
 
 func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
@@ -744,7 +840,11 @@ func importPreviewHandler(w http.ResponseWriter, r *http.Request) {
 	// Determine destination directory for duplicate checking
 	var destinationDir string
 	if data.TargetDirectory != "" {
-		destinationDir = filepath.Join(photoBaseDir, data.TargetDirectory)
+		destinationDir, err = safePhotoPath(data.TargetDirectory)
+		if err != nil {
+			http.Error(w, "Invalid target directory", http.StatusBadRequest)
+			return
+		}
 		// Verify target directory exists
 		if _, err := os.Stat(destinationDir); os.IsNotExist(err) {
 			http.Error(w, "Target directory does not exist", http.StatusBadRequest)
@@ -905,7 +1005,11 @@ func exportRawFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceDir := filepath.Join(photoBaseDir, data.Directory)
+	sourceDir, err := safePhotoPath(data.Directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	selectedDir := filepath.Join(sourceDir, "selected")
 	rawDestDir := filepath.Join(selectedDir, "raw")
 
@@ -1019,7 +1123,15 @@ func exportRawSingleFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceDir := filepath.Join(photoBaseDir, data.Directory)
+	sourceDir, err := safePhotoPath(data.Directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
+	if strings.Contains(data.Filename, "..") || strings.ContainsAny(data.Filename, `/\`) {
+		http.Error(w, "Invalid filename", http.StatusBadRequest)
+		return
+	}
 	selectedDir := filepath.Join(sourceDir, "selected")
 	rawDestDir := filepath.Join(selectedDir, "raw")
 
@@ -1090,7 +1202,11 @@ func exportStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceDir := filepath.Join(photoBaseDir, directory)
+	sourceDir, err := safePhotoPath(directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	selectedDir := filepath.Join(sourceDir, "selected")
 	rawDir := filepath.Join(selectedDir, "raw")
 
@@ -1260,7 +1376,12 @@ func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetDir := filepath.Join(photoBaseDir, data.Directory)
+	// Security: ensure the target directory stays within the photo base directory.
+	targetDir, err := safePhotoPath(data.Directory)
+	if err != nil {
+		http.Error(w, "Invalid directory", http.StatusBadRequest)
+		return
+	}
 	deletedCount := 0
 	notFoundCount := 0
 	errorCount := 0
@@ -1274,27 +1395,6 @@ func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		filePath := filepath.Join(targetDir, filename)
-
-		// Verify the file is actually in the target directory
-		absPath, err := filepath.Abs(filePath)
-		if err != nil {
-			log.Printf("Failed to get absolute path for %s: %v", filePath, err)
-			errorCount++
-			continue
-		}
-
-		absTargetDir, err := filepath.Abs(targetDir)
-		if err != nil {
-			log.Printf("Failed to get absolute path for target dir: %v", err)
-			errorCount++
-			continue
-		}
-
-		if !strings.HasPrefix(absPath, absTargetDir) {
-			log.Printf("Security check failed: file path %s is outside target directory", absPath)
-			errorCount++
-			continue
-		}
 
 		if err := os.Remove(filePath); err != nil {
 			if os.IsNotExist(err) {
@@ -1508,7 +1608,11 @@ func servePhotoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	directory := parts[0]
 	filename := parts[1]
-	photoPath := filepath.Join(photoBaseDir, directory, filename)
+	photoPath, err := safePhotoPath(directory, filename)
+	if err != nil {
+		http.Error(w, "Invalid photo path", http.StatusBadRequest)
+		return
+	}
 
 	if isRawFile(filename) {
 		jpegData, err := extractEmbeddedJPEG(photoPath)
@@ -1533,6 +1637,12 @@ func serveThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	directory := parts[0]
 	filename := parts[1]
+
+	// Guard against traversal in the directory/filename segments.
+	if strings.Contains(directory, "..") || strings.Contains(filename, "..") {
+		http.Error(w, "Invalid thumbnail path", http.StatusBadRequest)
+		return
+	}
 
 	thumbnailDir := filepath.Join(thumbnailCacheDir, directory)
 	thumbnailPath := filepath.Join(thumbnailDir, filename)

@@ -16,6 +16,7 @@ function App() {
     const [savedPhotos, setSavedPhotos] = useState(new Set());
     const [deletedPhotos, setDeletedPhotos] = useState(new Set());
     const [isImporting, setIsImporting] = useState(false);
+    const [importProgress, setImportProgress] = useState(null);
     const [sinceDate, setSinceDate] = useState('');
     const [untilDate, setUntilDate] = useState('');
     const [skipDuplicates, setSkipDuplicates] = useState(true);
@@ -105,6 +106,7 @@ function App() {
 
     const handleImport = async () => {
         setIsImporting(true);
+        setImportProgress(null);
         const toastId = toast.loading("Importing from USB...")
         try {
             const response = await fetch(`${API_URL}/api/import`, {
@@ -121,22 +123,78 @@ function App() {
                     import_raws: importRaws
                 })
             });
-            const data = await response.json();
-            if (response.ok) {
-                toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
-                if (data.new_directory && !addToCurrentBatch) {
+
+            // Hard failures (no USB, bad request) return non-200 plain text.
+            if (!response.ok) {
+                const text = await response.text();
+                toast.update(toastId, { render: text.trim() || 'An unknown error occurred.', type: "error", isLoading: false, autoClose: 5000 });
+                setIsImporting(false);
+                return;
+            }
+
+            // Success streams newline-delimited JSON progress events.
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let doneEvent = null;
+            let errorEvent = null;
+
+            const handleEvent = (evt) => {
+                if (evt.type === 'start') {
+                    setImportProgress({ copied: 0, total: evt.total });
+                    toast.update(toastId, { render: `Importing 0 / ${evt.total}...`, isLoading: true });
+                } else if (evt.type === 'progress') {
+                    setImportProgress({ copied: evt.copied, total: evt.total });
+                    toast.update(toastId, { render: `Importing ${evt.copied} / ${evt.total}...`, isLoading: true });
+                } else if (evt.type === 'done') {
+                    doneEvent = evt;
+                } else if (evt.type === 'error') {
+                    errorEvent = evt;
+                }
+            };
+
+            for (; ;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                let newlineIndex;
+                while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+                    const line = buffer.slice(0, newlineIndex).trim();
+                    buffer = buffer.slice(newlineIndex + 1);
+                    if (!line) continue;
+                    try {
+                        handleEvent(JSON.parse(line));
+                    } catch (e) {
+                        // Ignore malformed lines
+                    }
+                }
+            }
+            // Handle any trailing buffered line without a newline.
+            const tail = buffer.trim();
+            if (tail) {
+                try {
+                    handleEvent(JSON.parse(tail));
+                } catch (e) { /* ignore */ }
+            }
+
+            if (errorEvent) {
+                toast.update(toastId, { render: errorEvent.message || 'Import failed.', type: "error", isLoading: false, autoClose: 5000 });
+            } else if (doneEvent) {
+                toast.update(toastId, { render: doneEvent.message, type: "success", isLoading: false, autoClose: 5000 });
+                if (doneEvent.new_directory && !addToCurrentBatch) {
                     fetchDirectories();
-                    setCurrentDirectory(data.new_directory);
+                    setCurrentDirectory(doneEvent.new_directory);
                 } else if (addToCurrentBatch) {
                     // Refresh the current directory's photos
                     window.location.reload();
                 }
             } else {
-                toast.update(toastId, { render: data.error || 'An unknown error occurred.', type: "error", isLoading: false, autoClose: 5000 });
+                toast.update(toastId, { render: "Import finished.", type: "success", isLoading: false, autoClose: 5000 });
             }
         } catch (err) {
             toast.update(toastId, { render: "Failed to connect to the server for import.", type: "error", isLoading: false, autoClose: 5000 });
         }
+        setImportProgress(null);
         setIsImporting(false);
     };
 
@@ -551,6 +609,19 @@ function App() {
                     <button onClick={handleImport} disabled={isImporting} className="import-button">
                         {isImporting ? 'Importing...' : 'Import'}
                     </button>
+                    {isImporting && importProgress && importProgress.total > 0 && (
+                        <div className="import-progress">
+                            <div className="import-progress-track">
+                                <div
+                                    className="import-progress-fill"
+                                    style={{ width: `${Math.round((importProgress.copied / importProgress.total) * 100)}%` }}
+                                />
+                            </div>
+                            <div className="import-progress-label">
+                                {importProgress.copied} / {importProgress.total} files
+                            </div>
+                        </div>
+                    )}
                     <div className="date-range-container">
                         <div className="date-picker-container">
                             <label htmlFor="since-date">From:</label>
