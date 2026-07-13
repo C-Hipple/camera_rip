@@ -35,6 +35,23 @@
     line-height: 1.5;
 }
 
+.modal-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    margin: 0 0 25px 0;
+    font-size: 1rem;
+    border-radius: 5px;
+    background-color: #282828; /* Gruvbox Dark */
+    color: #ebdbb2; /* Gruvbox Light */
+    border: 1px solid #a89984;
+}
+
+.modal-input:focus {
+    outline: none;
+    border-color: #d79921; /* Gruvbox Yellow */
+}
+
 .modal-buttons {
     display: flex;
     gap: 15px;

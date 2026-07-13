@@ -53,7 +53,7 @@ cd frontend && npx react-scripts test --watchAll=false  # Frontend tests
 
 ## API Endpoints
 
-Key routes in `main.go`: `/api/import`, `/api/photos`, `/api/save`, `/api/export-raw`, `/api/export-raw-single`, `/api/delete-imported`, `/api/delete-photos`, `/api/directories`, `/api/selected-photos`, `/api/export-status`. Photos served at `/photos/` and thumbnails at `/thumbnail/`.
+Key routes in `main.go`: `/api/import`, `/api/photos`, `/api/save`, `/api/export-raw`, `/api/export-raw-single`, `/api/delete-imported`, `/api/delete-photos`, `/api/directories`, `/api/rename-directory`, `/api/selected-photos`, `/api/export-status`. Photos served at `/photos/` and thumbnails at `/thumbnail/`.
 
 ## Adding Support for Other Camera Brands
 

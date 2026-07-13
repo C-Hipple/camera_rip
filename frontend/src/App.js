@@ -4,6 +4,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import './App.css';
 import PhotoViewer from './PhotoViewer';
 import ConfirmModal from './ConfirmModal';
+import RenameModal from './RenameModal';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
@@ -37,6 +38,19 @@ function App() {
     const currentPhotoNameRef = useRef(null);
     const [importPreview, setImportPreview] = useState(null);
     const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+    const [showRenameModal, setShowRenameModal] = useState(false);
+    const [isRenaming, setIsRenaming] = useState(false);
+
+    // Switch the visible directory, clearing the previous directory's photo
+    // list in the same update. Clearing in an effect is too late: React
+    // commits one frame pairing the new directory with the stale filenames,
+    // and the carousel/viewer request photos and thumbnails that don't exist
+    // under the new directory (logged as ENOENT errors by the backend).
+    const switchDirectory = useCallback((dir) => {
+        setPhotos([]);
+        setCurrentIndex(0);
+        setCurrentDirectory(dir);
+    }, []);
 
     const fetchDirectories = useCallback(() => {
         fetch(`${API_URL}/api/directories`)
@@ -45,12 +59,12 @@ function App() {
                 if (data && !data.error) {
                     setDirectories(data);
                     if (data.length > 0 && !currentDirectory) {
-                        setCurrentDirectory(data[0]);
+                        switchDirectory(data[0]);
                     }
                 }
             })
             .catch(err => toast.error("Error fetching directories."));
-    }, [currentDirectory]);
+    }, [currentDirectory, switchDirectory]);
 
     const fetchExportStatus = useCallback(() => {
         if (!currentDirectory) return;
@@ -183,7 +197,7 @@ function App() {
                 toast.update(toastId, { render: doneEvent.message, type: "success", isLoading: false, autoClose: 5000 });
                 if (doneEvent.new_directory && !addToCurrentBatch) {
                     fetchDirectories();
-                    setCurrentDirectory(doneEvent.new_directory);
+                    switchDirectory(doneEvent.new_directory);
                 } else if (addToCurrentBatch) {
                     // Refresh the current directory's photos
                     window.location.reload();
@@ -401,6 +415,44 @@ function App() {
         setIsDeletingPhotos(false);
     };
 
+    const handleRenameDirectory = async (newName) => {
+        newName = newName.trim();
+        if (!newName || newName === currentDirectory) {
+            setShowRenameModal(false);
+            return;
+        }
+        setIsRenaming(true);
+        const toastId = toast.loading("Renaming folder...");
+        try {
+            const response = await fetch(`${API_URL}/api/rename-directory`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    directory: currentDirectory,
+                    new_name: newName
+                })
+            });
+            if (response.ok) {
+                const data = await response.json();
+                toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
+                setShowRenameModal(false);
+                // Swap the name in place so the selector stays consistent, then
+                // re-fetch the list to restore server-side ordering.
+                setDirectories(prev => prev.map(dir => (dir === currentDirectory ? data.new_directory : dir)));
+                switchDirectory(data.new_directory);
+                fetchDirectories();
+            } else {
+                const text = await response.text();
+                toast.update(toastId, { render: text.trim() || 'Failed to rename folder.', type: "error", isLoading: false, autoClose: 5000 });
+            }
+        } catch (err) {
+            toast.update(toastId, { render: "Failed to rename folder.", type: "error", isLoading: false, autoClose: 5000 });
+        }
+        setIsRenaming(false);
+    };
+
     // Filter photos based on carousel filter mode
     const filteredPhotos = React.useMemo(() => {
         if (carouselFilter === 'selected') {
@@ -477,6 +529,9 @@ function App() {
 
     useEffect(() => {
         const handleKeyDown = (e) => {
+            // Ignore shortcuts while typing in a form field (e.g. the rename input)
+            const tag = e.target.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
             if (filteredPhotos.length === 0) return;
             const currentPhotoName = filteredPhotos[currentIndex];
 
@@ -587,6 +642,13 @@ function App() {
                 confirmText="Delete"
                 cancelText="Cancel"
                 confirmButtonClass="delete-confirm"
+            />
+            <RenameModal
+                isOpen={showRenameModal}
+                onClose={() => setShowRenameModal(false)}
+                onConfirm={handleRenameDirectory}
+                initialValue={currentDirectory}
+                isBusy={isRenaming}
             />
 
             <div className={`bottom-left-controls ${isSidebarCollapsed ? 'collapsed' : ''}`}>
@@ -757,13 +819,22 @@ function App() {
                     {directories.length > 0 && (
                         <select
                             value={currentDirectory}
-                            onChange={e => setCurrentDirectory(e.target.value)}
+                            onChange={e => switchDirectory(e.target.value)}
                             className="directory-selector"
                         >
                             {directories.map(dir => (
                                 <option key={dir} value={dir}>{dir}</option>
                             ))}
                         </select>
+                    )}
+                    {currentDirectory && (
+                        <button
+                            onClick={() => setShowRenameModal(true)}
+                            disabled={isRenaming}
+                            className="rename-button"
+                        >
+                            Rename Folder
+                        </button>
                     )}
                     <button
                         onClick={() => setShowDeleteModal(true)}
