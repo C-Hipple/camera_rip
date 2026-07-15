@@ -352,6 +352,15 @@
   text-align: center;
 }
 
+.photo-metadata-overlay {
+  font-size: 0.85rem;
+  color: #bdae93;
+  font-family: monospace;
+  text-align: center;
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
 .photo-container {
   margin: auto;
   width: 100%;

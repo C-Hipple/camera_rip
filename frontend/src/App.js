@@ -40,6 +40,7 @@ function App() {
     const [isLoadingPreview, setIsLoadingPreview] = useState(false);
     const [showRenameModal, setShowRenameModal] = useState(false);
     const [isRenaming, setIsRenaming] = useState(false);
+    const [photoMetadata, setPhotoMetadata] = useState(null);
 
     // Switch the visible directory, clearing the previous directory's photo
     // list in the same update. Clearing in an effect is too late: React
@@ -583,6 +584,35 @@ function App() {
     const isPinnedSaved = pinnedPhoto ? savedPhotos.has(pinnedPhoto) : false;
     const isPinnedDeleted = pinnedPhoto ? deletedPhotos.has(pinnedPhoto) : false;
 
+    // Fetch EXIF camera settings (shutter speed, aperture, ISO, focal length)
+    // for the photo on display. The cancelled flag drops stale responses when
+    // navigating quickly between photos.
+    useEffect(() => {
+        if (!currentPhotoName || !currentDirectory) {
+            setPhotoMetadata(null);
+            return;
+        }
+        let cancelled = false;
+        setPhotoMetadata(null);
+        fetch(`${API_URL}/api/photo-metadata?directory=${encodeURIComponent(currentDirectory)}&photo=${encodeURIComponent(currentPhotoName)}`)
+            .then(res => res.json())
+            .then(data => {
+                if (!cancelled) {
+                    setPhotoMetadata(data && !data.error ? data : null);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setPhotoMetadata(null);
+                }
+            });
+        return () => { cancelled = true; };
+    }, [currentPhotoName, currentDirectory]);
+
+    const metadataParts = photoMetadata
+        ? [photoMetadata.shutter_speed, photoMetadata.aperture, photoMetadata.iso, photoMetadata.focal_length].filter(Boolean)
+        : [];
+
     return (
         <div className={`App ${isFullscreen ? 'fullscreen-mode' : ''}`}>
             <ToastContainer position="bottom-center" autoClose={5000} hideProgressBar={false} newestOnTop={false} closeOnClick rtl={false} pauseOnFocusLoss draggable pauseOnHover theme="dark" />
@@ -901,6 +931,9 @@ function App() {
                                             <div className="photo-filename-overlay">
                                                 <div className="filename">{currentPhotoName}</div>
                                                 <div className="photo-position-overlay">{currentIndex + 1} / {filteredPhotos.length}</div>
+                                                {metadataParts.length > 0 && (
+                                                    <div className="photo-metadata-overlay">{metadataParts.join(' · ')}</div>
+                                                )}
                                             </div>
                                         )}
                                         {pinnedPhoto ? (

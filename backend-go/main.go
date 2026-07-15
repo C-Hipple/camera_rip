@@ -177,6 +177,166 @@ func scanExtractJPEG(data []byte, rawPath string) ([]byte, error) {
 	return best, nil
 }
 
+// photoMetadata holds camera settings extracted from a photo's EXIF data,
+// pre-formatted for display (e.g. "1/250s", "f/5.6", "ISO 400", "50mm").
+type photoMetadata struct {
+	ShutterSpeed string `json:"shutter_speed,omitempty"`
+	Aperture     string `json:"aperture,omitempty"`
+	ISO          string `json:"iso,omitempty"`
+	FocalLength  string `json:"focal_length,omitempty"`
+}
+
+// trimFloat formats v with at most one decimal place, dropping a trailing ".0"
+// (5.6 -> "5.6", 8.0 -> "8").
+func trimFloat(v float64) string {
+	return strings.TrimSuffix(strconv.FormatFloat(v, 'f', 1, 64), ".0")
+}
+
+func formatShutterSpeed(num, den uint32) string {
+	if num == 0 || den == 0 {
+		return ""
+	}
+	if num >= den {
+		return trimFloat(float64(num)/float64(den)) + "s"
+	}
+	return fmt.Sprintf("1/%.0fs", float64(den)/float64(num))
+}
+
+// parseExifTIFF extracts camera settings from a TIFF block (the payload of a
+// JPEG APP1 EXIF segment, a TIFF-based RAW, or a CR3 CMT2 box). It walks the
+// IFD0 chain and the Exif SubIFD (tag 0x8769) when present; CR3 CMT2 blocks
+// carry the Exif tags directly in IFD0.
+func parseExifTIFF(data []byte) (photoMetadata, error) {
+	var meta photoMetadata
+	if len(data) < 8 {
+		return meta, fmt.Errorf("EXIF data too small")
+	}
+	var bo binary.ByteOrder
+	switch {
+	case data[0] == 'I' && data[1] == 'I':
+		bo = binary.LittleEndian
+	case data[0] == 'M' && data[1] == 'M':
+		bo = binary.BigEndian
+	default:
+		return meta, fmt.Errorf("invalid TIFF byte order")
+	}
+	// 42 is standard TIFF; 0x4F52/0x5352 are Olympus ORF variants.
+	switch bo.Uint16(data[2:]) {
+	case 42, 0x4F52, 0x5352:
+	default:
+		return meta, fmt.Errorf("invalid TIFF magic")
+	}
+
+	// readRational reads a RATIONAL value referenced by the entry at e.
+	readRational := func(e int) (uint32, uint32, bool) {
+		off := int(bo.Uint32(data[e+8:]))
+		if off < 0 || off+8 > len(data) {
+			return 0, 0, false
+		}
+		return bo.Uint32(data[off:]), bo.Uint32(data[off+4:]), true
+	}
+
+	var exifIFDOff uint32
+	parseIFD := func(ifdOff uint32) {
+		if int(ifdOff)+2 > len(data) {
+			return
+		}
+		n := int(bo.Uint16(data[ifdOff:]))
+		base := int(ifdOff) + 2
+		for i := 0; i < n; i++ {
+			e := base + i*12
+			if e+12 > len(data) {
+				break
+			}
+			switch bo.Uint16(data[e:]) {
+			case 0x8769: // Exif SubIFD pointer
+				exifIFDOff = bo.Uint32(data[e+8:])
+			case 0x829A: // ExposureTime
+				if num, den, ok := readRational(e); ok {
+					meta.ShutterSpeed = formatShutterSpeed(num, den)
+				}
+			case 0x829D: // FNumber
+				if num, den, ok := readRational(e); ok && den > 0 {
+					meta.Aperture = "f/" + trimFloat(float64(num)/float64(den))
+				}
+			case 0x8827: // ISO speed (SHORT, stored inline)
+				meta.ISO = fmt.Sprintf("ISO %d", bo.Uint16(data[e+8:]))
+			case 0x920A: // FocalLength
+				if num, den, ok := readRational(e); ok && den > 0 && num > 0 {
+					meta.FocalLength = trimFloat(float64(num)/float64(den)) + "mm"
+				}
+			}
+		}
+	}
+
+	parseIFD(bo.Uint32(data[4:]))
+	if exifIFDOff != 0 {
+		parseIFD(exifIFDOff)
+	}
+	return meta, nil
+}
+
+// jpegExtractExifTIFF returns the TIFF payload of a JPEG's APP1 EXIF segment.
+func jpegExtractExifTIFF(data []byte) ([]byte, error) {
+	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+		return nil, fmt.Errorf("not a JPEG")
+	}
+	exifHeader := []byte("Exif\x00\x00")
+	off := 2
+	for off+4 <= len(data) {
+		if data[off] != 0xFF {
+			break
+		}
+		marker := data[off+1]
+		// Standalone markers without a length field.
+		if marker == 0x01 || (marker >= 0xD0 && marker <= 0xD9) {
+			off += 2
+			continue
+		}
+		if marker == 0xDA { // start of scan — EXIF only appears before this
+			break
+		}
+		segLen := int(binary.BigEndian.Uint16(data[off+2:]))
+		if segLen < 2 || off+2+segLen > len(data) {
+			break
+		}
+		if marker == 0xE1 && segLen >= 2+len(exifHeader)+8 && bytes.HasPrefix(data[off+4:], exifHeader) {
+			return data[off+4+len(exifHeader) : off+2+segLen], nil
+		}
+		off += 2 + segLen
+	}
+	return nil, fmt.Errorf("no EXIF APP1 segment found")
+}
+
+// extractPhotoMetadata reads camera settings from a photo's EXIF data.
+// JPEGs carry EXIF in an APP1 segment; TIFF-based RAWs (ORF) are parsed
+// directly; ISOBMFF RAWs (CR3) store the Exif IFD as a bare TIFF block
+// inside the CMT2 box.
+func extractPhotoMetadata(path string) (photoMetadata, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return photoMetadata{}, err
+	}
+	if len(data) < 8 {
+		return photoMetadata{}, fmt.Errorf("file too small: %s", path)
+	}
+
+	if (data[0] == 'I' && data[1] == 'I') || (data[0] == 'M' && data[1] == 'M') {
+		return parseExifTIFF(data)
+	}
+	if data[0] == 0xFF && data[1] == 0xD8 {
+		tiff, err := jpegExtractExifTIFF(data)
+		if err != nil {
+			return photoMetadata{}, err
+		}
+		return parseExifTIFF(tiff)
+	}
+	if idx := bytes.Index(data, []byte("CMT2")); idx >= 0 && idx+4 < len(data) {
+		return parseExifTIFF(data[idx+4:])
+	}
+	return photoMetadata{}, fmt.Errorf("no EXIF data found in %s", path)
+}
+
 // rawAlreadyExported returns true if a raw file with the given base name (any supported
 // extension) already exists in dir.
 func rawAlreadyExported(dir, baseName string) bool {
@@ -250,6 +410,7 @@ func main() {
 	http.HandleFunc("/api/delete-imported", corsHandler(deleteImportedHandler))
 	http.HandleFunc("/api/delete-photos", corsHandler(deletePhotosHandler))
 	http.HandleFunc("/api/rename-directory", corsHandler(renameDirectoryHandler))
+	http.HandleFunc("/api/photo-metadata", corsHandler(photoMetadataHandler))
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
@@ -1689,6 +1850,29 @@ func preGenerateThumbnails(directory string, photos []string) {
 	// Wait for all workers to complete
 	wg.Wait()
 	log.Printf("Completed thumbnail generation for directory: %s (%d photos)", directory, len(photos))
+}
+
+func photoMetadataHandler(w http.ResponseWriter, r *http.Request) {
+	directory := r.URL.Query().Get("directory")
+	photo := r.URL.Query().Get("photo")
+	if directory == "" || photo == "" {
+		http.Error(w, "Missing 'directory' or 'photo' query parameter", http.StatusBadRequest)
+		return
+	}
+	photoPath, err := safePhotoPath(directory, photo)
+	if err != nil {
+		http.Error(w, "Invalid photo path", http.StatusBadRequest)
+		return
+	}
+
+	// Files without EXIF (PNGs, screenshots, stripped JPEGs) are normal —
+	// return an empty object so the frontend simply shows nothing.
+	meta, err := extractPhotoMetadata(photoPath)
+	if err != nil {
+		meta = photoMetadata{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(meta)
 }
 
 func servePhotoHandler(w http.ResponseWriter, r *http.Request) {
