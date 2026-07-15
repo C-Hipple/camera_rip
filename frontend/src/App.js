@@ -668,22 +668,6 @@ function App() {
                             </p>
                         </div>
                     )}
-                    <button onClick={handleImport} disabled={isImporting} className="import-button">
-                        {isImporting ? 'Importing...' : 'Import'}
-                    </button>
-                    {isImporting && importProgress && importProgress.total > 0 && (
-                        <div className="import-progress">
-                            <div className="import-progress-track">
-                                <div
-                                    className="import-progress-fill"
-                                    style={{ width: `${Math.round((importProgress.copied / importProgress.total) * 100)}%` }}
-                                />
-                            </div>
-                            <div className="import-progress-label">
-                                {importProgress.copied} / {importProgress.total} files
-                            </div>
-                        </div>
-                    )}
                     <div className="date-range-container">
                         <div className="date-picker-container">
                             <label htmlFor="since-date">From:</label>
@@ -811,6 +795,22 @@ function App() {
                     ) : (
                         <div className="import-preview error">
                             <p>USB not detected</p>
+                        </div>
+                    )}
+                    <button onClick={handleImport} disabled={isImporting} className="import-button">
+                        {isImporting ? 'Importing...' : 'Import'}
+                    </button>
+                    {isImporting && importProgress && importProgress.total > 0 && (
+                        <div className="import-progress">
+                            <div className="import-progress-track">
+                                <div
+                                    className="import-progress-fill"
+                                    style={{ width: `${Math.round((importProgress.copied / importProgress.total) * 100)}%` }}
+                                />
+                            </div>
+                            <div className="import-progress-label">
+                                {importProgress.copied} / {importProgress.total} files
+                            </div>
                         </div>
                     )}
                 </div>
