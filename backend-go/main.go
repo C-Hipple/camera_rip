@@ -722,12 +722,13 @@ func buildImportedFilesSet() map[string]bool {
 
 func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 	var data struct {
-		Since           string `json:"since"`
-		Until           string `json:"until"`
-		SkipDuplicates  bool   `json:"skip_duplicates"`
-		TargetDirectory string `json:"target_directory"`
-		ImportVideos    bool   `json:"import_videos"`
-		ImportRaws      bool   `json:"import_raws"`
+		Since            string `json:"since"`
+		Until            string `json:"until"`
+		SkipDuplicates   bool   `json:"skip_duplicates"`
+		TargetDirectory  string `json:"target_directory"`
+		NewDirectoryName string `json:"new_directory_name"`
+		ImportVideos     bool   `json:"import_videos"`
+		ImportRaws       bool   `json:"import_raws"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil && err != io.EOF {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -782,7 +783,25 @@ func importFromUSBHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		destinationDir = filepath.Join(photoBaseDir, time.Now().Format("2006-01-02_15-04-05"))
+		// New batch: use the client-supplied folder name when given (a single
+		// folder level under photoBaseDir), otherwise default to a timestamp.
+		name := strings.TrimSpace(data.NewDirectoryName)
+		if name == "" {
+			name = time.Now().Format("2006-01-02_15-04-05")
+		}
+		if strings.HasPrefix(name, ".") || strings.ContainsAny(name, `/\`) {
+			http.Error(w, "Invalid folder name: must not start with '.' or contain path separators", http.StatusBadRequest)
+			return
+		}
+		destinationDir, err = safePhotoPath(name)
+		if err != nil {
+			http.Error(w, "Invalid folder name", http.StatusBadRequest)
+			return
+		}
+		if _, err := os.Stat(destinationDir); err == nil {
+			http.Error(w, "A folder named '"+name+"' already exists. Use 'Add to current batch' to import into an existing folder.", http.StatusBadRequest)
+			return
+		}
 		isNewBatch = true
 	}
 

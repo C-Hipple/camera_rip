@@ -103,6 +103,36 @@
   width: 100%;
 }
 
+.folder-name-container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.folder-name-container label {
+  font-size: 0.9rem;
+  color: #ebdbb2;
+}
+
+.folder-name-input {
+  padding: 6px;
+  font-size: 0.9rem;
+  font-family: monospace;
+  background-color: #3c3836;
+  color: #ebdbb2;
+  border: 1px solid #a89984;
+  border-radius: 5px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.folder-name-input:disabled {
+  color: #a89984;
+  border-color: #504945;
+  cursor: not-allowed;
+}
+
 .checkbox-container {
   display: flex;
   align-items: center;
