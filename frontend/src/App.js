@@ -8,6 +8,12 @@ import RenameModal from './RenameModal';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
+// Matches the backend's default new-import folder name (2006-01-02_15-04-05).
+const formatFolderTimestamp = (d) => {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+};
+
 function App() {
     const [directories, setDirectories] = useState([]);
     const [currentDirectory, setCurrentDirectory] = useState('');
@@ -40,6 +46,18 @@ function App() {
     const [isLoadingPreview, setIsLoadingPreview] = useState(false);
     const [showRenameModal, setShowRenameModal] = useState(false);
     const [isRenaming, setIsRenaming] = useState(false);
+    const [photoMetadata, setPhotoMetadata] = useState(null);
+    const [newFolderName, setNewFolderName] = useState(() => formatFolderTimestamp(new Date()));
+    const [folderNameEdited, setFolderNameEdited] = useState(false);
+
+    // Keep the destination folder prefill ticking with the current time until
+    // the user touches it, so an untouched field always matches the moment
+    // Import is clicked.
+    useEffect(() => {
+        if (folderNameEdited) return;
+        const id = setInterval(() => setNewFolderName(formatFolderTimestamp(new Date())), 1000);
+        return () => clearInterval(id);
+    }, [folderNameEdited]);
 
     // Switch the visible directory, clearing the previous directory's photo
     // list in the same update. Clearing in an effect is too late: React
@@ -133,6 +151,7 @@ function App() {
                     until: untilDate,
                     skip_duplicates: skipDuplicates,
                     target_directory: addToCurrentBatch ? currentDirectory : '',
+                    new_directory_name: addToCurrentBatch ? '' : newFolderName.trim(),
                     import_videos: importVideos,
                     import_raws: importRaws
                 })
@@ -198,6 +217,9 @@ function App() {
                 if (doneEvent.new_directory && !addToCurrentBatch) {
                     fetchDirectories();
                     switchDirectory(doneEvent.new_directory);
+                    // Re-arm the prefill for the next import.
+                    setNewFolderName(formatFolderTimestamp(new Date()));
+                    setFolderNameEdited(false);
                 } else if (addToCurrentBatch) {
                     // Refresh the current directory's photos
                     window.location.reload();
@@ -583,6 +605,35 @@ function App() {
     const isPinnedSaved = pinnedPhoto ? savedPhotos.has(pinnedPhoto) : false;
     const isPinnedDeleted = pinnedPhoto ? deletedPhotos.has(pinnedPhoto) : false;
 
+    // Fetch EXIF camera settings (shutter speed, aperture, ISO, focal length)
+    // for the photo on display. The cancelled flag drops stale responses when
+    // navigating quickly between photos.
+    useEffect(() => {
+        if (!currentPhotoName || !currentDirectory) {
+            setPhotoMetadata(null);
+            return;
+        }
+        let cancelled = false;
+        setPhotoMetadata(null);
+        fetch(`${API_URL}/api/photo-metadata?directory=${encodeURIComponent(currentDirectory)}&photo=${encodeURIComponent(currentPhotoName)}`)
+            .then(res => res.json())
+            .then(data => {
+                if (!cancelled) {
+                    setPhotoMetadata(data && !data.error ? data : null);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setPhotoMetadata(null);
+                }
+            });
+        return () => { cancelled = true; };
+    }, [currentPhotoName, currentDirectory]);
+
+    const metadataParts = photoMetadata
+        ? [photoMetadata.shutter_speed, photoMetadata.aperture, photoMetadata.iso, photoMetadata.focal_length].filter(Boolean)
+        : [];
+
     return (
         <div className={`App ${isFullscreen ? 'fullscreen-mode' : ''}`}>
             <ToastContainer position="bottom-center" autoClose={5000} hideProgressBar={false} newestOnTop={false} closeOnClick rtl={false} pauseOnFocusLoss draggable pauseOnHover theme="dark" />
@@ -666,22 +717,6 @@ function App() {
                             <p className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : (isDeleted ? 'status-deleted' : ''))}`}>
                                 {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : (isDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
                             </p>
-                        </div>
-                    )}
-                    <button onClick={handleImport} disabled={isImporting} className="import-button">
-                        {isImporting ? 'Importing...' : 'Import'}
-                    </button>
-                    {isImporting && importProgress && importProgress.total > 0 && (
-                        <div className="import-progress">
-                            <div className="import-progress-track">
-                                <div
-                                    className="import-progress-fill"
-                                    style={{ width: `${Math.round((importProgress.copied / importProgress.total) * 100)}%` }}
-                                />
-                            </div>
-                            <div className="import-progress-label">
-                                {importProgress.copied} / {importProgress.total} files
-                            </div>
                         </div>
                     )}
                     <div className="date-range-container">
@@ -813,6 +848,35 @@ function App() {
                             <p>USB not detected</p>
                         </div>
                     )}
+                    <div className="folder-name-container">
+                        <label htmlFor="new-folder-name">Import to folder:</label>
+                        <input
+                            type="text"
+                            id="new-folder-name"
+                            value={addToCurrentBatch ? currentDirectory : newFolderName}
+                            onChange={e => { setFolderNameEdited(true); setNewFolderName(e.target.value); }}
+                            onFocus={() => setFolderNameEdited(true)}
+                            className="folder-name-input"
+                            disabled={addToCurrentBatch}
+                            spellCheck={false}
+                        />
+                    </div>
+                    <button onClick={handleImport} disabled={isImporting} className="import-button">
+                        {isImporting ? 'Importing...' : 'Import'}
+                    </button>
+                    {isImporting && importProgress && importProgress.total > 0 && (
+                        <div className="import-progress">
+                            <div className="import-progress-track">
+                                <div
+                                    className="import-progress-fill"
+                                    style={{ width: `${Math.round((importProgress.copied / importProgress.total) * 100)}%` }}
+                                />
+                            </div>
+                            <div className="import-progress-label">
+                                {importProgress.copied} / {importProgress.total} files
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <div className="sidebar-controls">
@@ -901,6 +965,9 @@ function App() {
                                             <div className="photo-filename-overlay">
                                                 <div className="filename">{currentPhotoName}</div>
                                                 <div className="photo-position-overlay">{currentIndex + 1} / {filteredPhotos.length}</div>
+                                                {metadataParts.length > 0 && (
+                                                    <div className="photo-metadata-overlay">{metadataParts.join(' · ')}</div>
+                                                )}
                                             </div>
                                         )}
                                         {pinnedPhoto ? (
