@@ -408,6 +408,7 @@ func main() {
 	http.HandleFunc("/api/export-status", corsHandler(exportStatusHandler))
 	http.HandleFunc("/api/selected-photos", corsHandler(getSelectedPhotosHandler))
 	http.HandleFunc("/api/delete-imported", corsHandler(deleteImportedHandler))
+	http.HandleFunc("/api/sd-cleanup", corsHandler(sdCleanupHandler))
 	http.HandleFunc("/api/delete-photos", corsHandler(deletePhotosHandler))
 	http.HandleFunc("/api/rename-directory", corsHandler(renameDirectoryHandler))
 	http.HandleFunc("/api/photo-metadata", corsHandler(photoMetadataHandler))
@@ -1598,6 +1599,120 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 		"errors":      errorCount,
 		"total_found": deletedCount + deletedRawCount + notFoundCount + errorCount,
 	})
+}
+
+// sdCleanupItem describes one junk directory found at the root of the SD card.
+type sdCleanupItem struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"` // "trash" or "system"
+	Size  int64  `json:"size"`
+	Files int    `json:"files"`
+}
+
+// sdCleanupTarget classifies hidden directories the OS leaves at the SD card
+// root: trash folders (macOS .Trashes, Linux .Trash-<uid>) and macOS metadata
+// folders that shadow deleted/indexed files and can grow large. Only names
+// matching this fixed allowlist are ever deleted by the cleanup handler.
+func sdCleanupTarget(name string) (kind string, ok bool) {
+	if name == ".Trashes" || strings.HasPrefix(name, ".Trash-") {
+		return "trash", true
+	}
+	switch name {
+	case ".fseventsd", ".Spotlight-V100", ".TemporaryItems":
+		return "system", true
+	}
+	return "", false
+}
+
+// scanSDCleanupTargets finds cleanup targets at the mount point root and
+// measures their total size and file count.
+func scanSDCleanupTargets(mountPoint string) []sdCleanupItem {
+	items := []sdCleanupItem{}
+	entries, err := ioutil.ReadDir(mountPoint)
+	if err != nil {
+		return items
+	}
+	for _, entry := range entries {
+		kind, ok := sdCleanupTarget(entry.Name())
+		if !ok || !entry.IsDir() {
+			continue
+		}
+		item := sdCleanupItem{Name: entry.Name(), Kind: kind}
+		filepath.Walk(filepath.Join(mountPoint, entry.Name()), func(path string, info os.FileInfo, err error) error {
+			if err != nil || info == nil {
+				return nil
+			}
+			if !info.IsDir() {
+				item.Size += info.Size()
+				item.Files++
+			}
+			return nil
+		})
+		items = append(items, item)
+	}
+	return items
+}
+
+// sdCleanupHandler reports (GET) and deletes (POST) trash and OS metadata
+// folders at the root of the SD card. Deletion is restricted to the
+// sdCleanupTarget allowlist — nothing under DCIM is ever touched.
+func sdCleanupHandler(w http.ResponseWriter, r *http.Request) {
+	usbMountPoint := findUSBMountPoint()
+
+	switch r.Method {
+	case http.MethodGet:
+		if usbMountPoint == "" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"usb_connected": false,
+				"items":         []sdCleanupItem{},
+				"total_size":    0,
+			})
+			return
+		}
+		items := scanSDCleanupTargets(usbMountPoint)
+		var totalSize int64
+		for _, item := range items {
+			totalSize += item.Size
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"usb_connected": true,
+			"items":         items,
+			"total_size":    totalSize,
+		})
+
+	case http.MethodPost:
+		if usbMountPoint == "" {
+			http.Error(w, "USB device with a camera DCIM directory (e.g. 100CANON, 100OLYMP) not found. Is it connected?", http.StatusNotFound)
+			return
+		}
+		items := scanSDCleanupTargets(usbMountPoint)
+		deletedCount := 0
+		errorCount := 0
+		var freedBytes int64
+		for _, item := range items {
+			path := filepath.Join(usbMountPoint, item.Name)
+			if err := os.RemoveAll(path); err != nil {
+				log.Printf("Failed to delete %s from SD card: %v", path, err)
+				errorCount++
+				continue
+			}
+			log.Printf("Deleted %s from SD card (%d files, %d bytes)", item.Name, item.Files, item.Size)
+			deletedCount++
+			freedBytes += item.Size
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "SD card cleanup complete",
+			"deleted": deletedCount,
+			"freed":   freedBytes,
+			"errors":  errorCount,
+		})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {

@@ -200,6 +200,71 @@ func TestExtractPhotoMetadataFromJPEG(t *testing.T) {
 	}
 }
 
+func TestSDCleanupTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		wantKind string
+		wantOK   bool
+	}{
+		{".Trashes", "trash", true},
+		{".Trash-1000", "trash", true},
+		{".Trash-501", "trash", true},
+		{".fseventsd", "system", true},
+		{".Spotlight-V100", "system", true},
+		{".TemporaryItems", "system", true},
+		{"DCIM", "", false},
+		{".thumbnails", "", false},
+		{"Trashes", "", false},
+	}
+	for _, tt := range tests {
+		kind, ok := sdCleanupTarget(tt.name)
+		if kind != tt.wantKind || ok != tt.wantOK {
+			t.Errorf("sdCleanupTarget(%q) = (%q, %v), want (%q, %v)", tt.name, kind, ok, tt.wantKind, tt.wantOK)
+		}
+	}
+}
+
+func TestScanSDCleanupTargets(t *testing.T) {
+	mount := t.TempDir()
+
+	// Camera content that must never be reported.
+	if err := os.MkdirAll(filepath.Join(mount, "DCIM", "100CANON"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mount, "DCIM", "100CANON", "IMG_0001.JPG"), []byte("photo"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// macOS trash with a nested per-user folder, and a Linux trash folder.
+	if err := os.MkdirAll(filepath.Join(mount, ".Trashes", "501"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mount, ".Trashes", "501", "IMG_0002.JPG"), []byte("trashed-file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(mount, ".Trash-1000", "files"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mount, ".Trash-1000", "files", "IMG_0003.ORF"), []byte("trashed-raw!"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	items := scanSDCleanupTargets(mount)
+	if len(items) != 2 {
+		t.Fatalf("scanSDCleanupTargets() found %d items, want 2: %+v", len(items), items)
+	}
+	byName := map[string]sdCleanupItem{}
+	for _, item := range items {
+		byName[item.Name] = item
+	}
+	if it, ok := byName[".Trashes"]; !ok || it.Kind != "trash" || it.Files != 1 || it.Size != int64(len("trashed-file")) {
+		t.Errorf(".Trashes item = %+v, want trash kind with 1 file of %d bytes", byName[".Trashes"], len("trashed-file"))
+	}
+	if it, ok := byName[".Trash-1000"]; !ok || it.Kind != "trash" || it.Files != 1 || it.Size != int64(len("trashed-raw!")) {
+		t.Errorf(".Trash-1000 item = %+v, want trash kind with 1 file of %d bytes", byName[".Trash-1000"], len("trashed-raw!"))
+	}
+}
+
 func TestFormatShutterSpeed(t *testing.T) {
 	tests := []struct {
 		num, den uint32
