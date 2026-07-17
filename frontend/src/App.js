@@ -8,6 +8,18 @@ import RenameModal from './RenameModal';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
+const formatBytes = (bytes) => {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let value = bytes;
+    let i = 0;
+    while (value >= 1024 && i < units.length - 1) {
+        value /= 1024;
+        i++;
+    }
+    return `${i === 0 || value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
+};
+
 // Matches the backend's default new-import folder name (2006-01-02_15-04-05).
 const formatFolderTimestamp = (d) => {
     const pad = n => String(n).padStart(2, '0');
@@ -35,6 +47,9 @@ function App() {
     const [isExportingRaw, setIsExportingRaw] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [sdCleanup, setSdCleanup] = useState(null);
+    const [showSDCleanupModal, setShowSDCleanupModal] = useState(false);
+    const [isCleaningSD, setIsCleaningSD] = useState(false);
     const [showDeletePhotosModal, setShowDeletePhotosModal] = useState(false);
     const [isDeletingPhotos, setIsDeletingPhotos] = useState(false);
     const [carouselFilter, setCarouselFilter] = useState('all');
@@ -132,9 +147,40 @@ function App() {
         setIsLoadingPreview(false);
     }, [sinceDate, untilDate, skipDuplicates, addToCurrentBatch, currentDirectory, importVideos, importRaws]);
 
+    // Detect trash (.Trashes, .Trash-1000) and OS metadata folders
+    // (.fseventsd, .Spotlight-V100, ...) left on the SD card by macOS/Linux.
+    const fetchSDCleanup = useCallback(() => {
+        fetch(`${API_URL}/api/sd-cleanup`)
+            .then(res => res.json())
+            .then(data => setSdCleanup(data && !data.error ? data : null))
+            .catch(() => setSdCleanup(null));
+    }, []);
+
     useEffect(() => {
         fetchImportPreview();
-    }, [fetchImportPreview]);
+        fetchSDCleanup();
+    }, [fetchImportPreview, fetchSDCleanup]);
+
+    const handleSDCleanup = async () => {
+        setIsCleaningSD(true);
+        setShowSDCleanupModal(false);
+        const toastId = toast.loading("Cleaning up SD card...");
+        try {
+            const response = await fetch(`${API_URL}/api/sd-cleanup`, { method: 'POST' });
+            if (response.ok) {
+                const data = await response.json();
+                const message = `Freed ${formatBytes(data.freed)} from SD card (${data.deleted} folder(s) removed${data.errors > 0 ? `, ${data.errors} errors` : ''})`;
+                toast.update(toastId, { render: message, type: "success", isLoading: false, autoClose: 5000 });
+            } else {
+                const text = await response.text();
+                toast.update(toastId, { render: text.trim() || 'Failed to clean up SD card.', type: "error", isLoading: false, autoClose: 5000 });
+            }
+        } catch (err) {
+            toast.update(toastId, { render: "Failed to clean up SD card.", type: "error", isLoading: false, autoClose: 5000 });
+        }
+        fetchSDCleanup();
+        setIsCleaningSD(false);
+    };
 
     const handleImport = async () => {
         setIsImporting(true);
@@ -685,6 +731,16 @@ function App() {
                 confirmButtonClass="delete-confirm"
             />
             <ConfirmModal
+                isOpen={showSDCleanupModal}
+                onClose={() => setShowSDCleanupModal(false)}
+                onConfirm={handleSDCleanup}
+                title="Clean Up SD Card"
+                message={`This will permanently delete ${sdCleanup && sdCleanup.items ? sdCleanup.items.map(item => item.name).join(', ') : ''} from the SD card, freeing ${formatBytes(sdCleanup ? sdCleanup.total_size : 0)}. These folders hold trashed files and operating system metadata — your photos in DCIM will not be touched. This action cannot be undone. Are you sure you want to continue?`}
+                confirmText="Delete"
+                cancelText="Cancel"
+                confirmButtonClass="delete-confirm"
+            />
+            <ConfirmModal
                 isOpen={showDeletePhotosModal}
                 onClose={() => setShowDeletePhotosModal(false)}
                 onConfirm={handleDeletePhotos}
@@ -907,6 +963,24 @@ function App() {
                     >
                         {isDeleting ? 'Deleting...' : 'Delete Already Imported from SD Card'}
                     </button>
+                    {sdCleanup && sdCleanup.usb_connected && sdCleanup.items && sdCleanup.items.length > 0 && (
+                        <div className="sd-cleanup">
+                            <div className="sd-cleanup-title">SD card clutter detected</div>
+                            {sdCleanup.items.map(item => (
+                                <div key={item.name} className="preview-stat">
+                                    <span className="preview-label">{item.kind === 'trash' ? 'Trash' : 'System'} · {item.name}</span>
+                                    <span className="preview-value">{formatBytes(item.size)}</span>
+                                </div>
+                            ))}
+                            <button
+                                onClick={() => setShowSDCleanupModal(true)}
+                                disabled={isCleaningSD}
+                                className="delete-button sd-cleanup-button"
+                            >
+                                {isCleaningSD ? 'Cleaning...' : `Free ${formatBytes(sdCleanup.total_size)} (Trash & System Files)`}
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
 
