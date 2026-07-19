@@ -210,9 +210,11 @@ function PhotoViewer({ photoName, directory, isSelected, isSaved, isDeleted, chi
                     onMouseLeave={handleMouseUpOrLeave}
                 />
             </div>
-            <div className="photo-info">
-                {children}
-            </div>
+            {children && (
+                <div className="photo-info">
+                    {children}
+                </div>
+            )}
         </div>
     );
 }
