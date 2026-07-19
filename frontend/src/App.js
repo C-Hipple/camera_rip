@@ -26,6 +26,64 @@ const formatFolderTimestamp = (d) => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
 };
 
+// Unsaved selections and deletion marks are stashed in localStorage per
+// directory so closing the tab mid-review doesn't lose progress. Saved
+// selections live on disk (the selected/ folder) and are never stashed.
+// All storage access is best-effort: a blocked or full store degrades to
+// the old no-persistence behavior rather than breaking review.
+const PENDING_KEY_PREFIX = 'camera-rip.pending.';
+
+const pendingStorageKey = (directory) => `${PENDING_KEY_PREFIX}${directory}`;
+
+const readPendingSelections = (directory) => {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(pendingStorageKey(directory)));
+        return {
+            selected: Array.isArray(parsed?.selected) ? parsed.selected : [],
+            deleted: Array.isArray(parsed?.deleted) ? parsed.deleted : [],
+        };
+    } catch (e) {
+        return { selected: [], deleted: [] };
+    }
+};
+
+const writePendingSelections = (directory, selected, deleted) => {
+    try {
+        if (selected.size === 0 && deleted.size === 0) {
+            localStorage.removeItem(pendingStorageKey(directory));
+        } else {
+            localStorage.setItem(pendingStorageKey(directory), JSON.stringify({
+                selected: Array.from(selected),
+                deleted: Array.from(deleted),
+            }));
+        }
+    } catch (e) { /* best-effort */ }
+};
+
+const movePendingSelections = (fromDirectory, toDirectory) => {
+    try {
+        const raw = localStorage.getItem(pendingStorageKey(fromDirectory));
+        localStorage.removeItem(pendingStorageKey(fromDirectory));
+        if (raw) {
+            localStorage.setItem(pendingStorageKey(toDirectory), raw);
+        }
+    } catch (e) { /* best-effort */ }
+};
+
+const prunePendingSelections = (directories) => {
+    try {
+        const valid = new Set(directories.map(pendingStorageKey));
+        const stale = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith(PENDING_KEY_PREFIX) && !valid.has(key)) {
+                stale.push(key);
+            }
+        }
+        stale.forEach(key => localStorage.removeItem(key));
+    } catch (e) { /* best-effort */ }
+};
+
 function App() {
     const [directories, setDirectories] = useState([]);
     const [currentDirectory, setCurrentDirectory] = useState('');
@@ -91,6 +149,7 @@ function App() {
             .then(data => {
                 if (data && !data.error) {
                     setDirectories(data);
+                    prunePendingSelections(data);
                     if (data.length > 0 && !currentDirectory) {
                         switchDirectory(data[0]);
                     }
@@ -283,39 +342,53 @@ function App() {
     useEffect(() => {
         if (!currentDirectory) return;
         setPinnedPhoto(null); // Reset pinned photo when directory changes
-        fetch(`${API_URL}/api/photos?directory=${encodeURIComponent(currentDirectory)}`)
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) {
-                    toast.error(data.error);
-                    setPhotos([]);
-                } else {
-                    setPhotos(data);
-                    setCurrentIndex(0);
-                }
-            })
-            .catch(err => toast.error("Error fetching photos."));
 
-        fetch(`${API_URL}/api/selected-photos?directory=${encodeURIComponent(currentDirectory)}`)
+        const photosPromise = fetch(`${API_URL}/api/photos?directory=${encodeURIComponent(currentDirectory)}`)
             .then(res => res.json())
-            .then(data => {
-                if (data.error) {
-                    toast.error(data.error);
-                    setSavedPhotos(new Set());
+            .catch(() => ({ error: "Error fetching photos." }));
+        const savedPromise = fetch(`${API_URL}/api/selected-photos?directory=${encodeURIComponent(currentDirectory)}`)
+            .then(res => res.json())
+            .catch(() => null); // Silently fall back — directory might not have a selected folder yet
+
+        // Restoring the stash needs both lists: entries that were saved in a
+        // previous session or whose file no longer exists must be dropped.
+        Promise.all([photosPromise, savedPromise]).then(([photosData, savedData]) => {
+            let photoList = [];
+            if (photosData.error) {
+                toast.error(photosData.error);
+            } else {
+                photoList = photosData;
+            }
+            setPhotos(photoList);
+            setCurrentIndex(0);
+
+            let saved = new Set();
+            if (savedData) {
+                if (savedData.error) {
+                    toast.error(savedData.error);
                 } else {
-                    setSavedPhotos(new Set(data));
+                    saved = new Set(savedData);
                 }
-                setSelectedPhotos(new Set()); // Clear selection on directory change
-                setDeletedPhotos(new Set()); // Clear deletion marks on directory change
-            })
-            .catch(err => {
-                setSavedPhotos(new Set()); // Default to empty set on error
-                setSelectedPhotos(new Set());
-                setDeletedPhotos(new Set());
-            });
+            }
+            setSavedPhotos(saved);
+
+            const inDirectory = new Set(photoList);
+            const pending = readPendingSelections(currentDirectory);
+            const restorable = (names) => names.filter(name => inDirectory.has(name) && !saved.has(name));
+            setSelectedPhotos(new Set(restorable(pending.selected)));
+            setDeletedPhotos(new Set(restorable(pending.deleted)));
+        });
 
         fetchExportStatus();
     }, [currentDirectory, fetchExportStatus]);
+
+    // Stash unsaved review state whenever it changes. Skipped until the
+    // directory's photos have loaded so the pre-restore empty sets can't
+    // overwrite a stash that hasn't been read back yet.
+    useEffect(() => {
+        if (!currentDirectory || photos.length === 0) return;
+        writePendingSelections(currentDirectory, selectedPhotos, deletedPhotos);
+    }, [currentDirectory, photos, selectedPhotos, deletedPhotos]);
 
     const handleSelection = useCallback((photoName, select) => {
         if (savedPhotos.has(photoName)) {
@@ -506,6 +579,9 @@ function App() {
                 const data = await response.json();
                 toast.update(toastId, { render: data.message, type: "success", isLoading: false, autoClose: 5000 });
                 setShowRenameModal(false);
+                // Carry the stashed unsaved selections over to the new name
+                // before switching, or the reload would restore an empty stash.
+                movePendingSelections(currentDirectory, data.new_directory);
                 // Swap the name in place so the selector stays consistent, then
                 // re-fetch the list to restore server-side ordering.
                 setDirectories(prev => prev.map(dir => (dir === currentDirectory ? data.new_directory : dir)));
