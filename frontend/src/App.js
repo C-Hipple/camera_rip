@@ -33,6 +33,14 @@ const formatFolderTimestamp = (d) => {
 // the old no-persistence behavior rather than breaking review.
 const PENDING_KEY_PREFIX = 'camera-rip.pending.';
 
+// Phone-sized screens get a touch-first layout: the sidebar becomes a
+// slide-in drawer and a fixed action bar replaces the desktop button row.
+// Guarded because jsdom (unit tests) doesn't implement matchMedia.
+const MOBILE_MEDIA_QUERY = '(max-width: 768px)';
+
+const matchesMobile = () =>
+    typeof window.matchMedia === 'function' && window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+
 const pendingStorageKey = (directory) => `${PENDING_KEY_PREFIX}${directory}`;
 
 const readPendingSelections = (directory) => {
@@ -111,10 +119,14 @@ function App() {
     const [showDeletePhotosModal, setShowDeletePhotosModal] = useState(false);
     const [isDeletingPhotos, setIsDeletingPhotos] = useState(false);
     const [carouselFilter, setCarouselFilter] = useState('all');
-    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+    const [isMobile, setIsMobile] = useState(matchesMobile);
+    // On phones the drawer starts closed so the photo has the full screen.
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(matchesMobile);
     const [showThumbnailView, setShowThumbnailView] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const currentPhotoNameRef = useRef(null);
+    const touchStartRef = useRef(null);
+    const lastTapRef = useRef({ time: 0, x: 0, y: 0 });
     const [importPreview, setImportPreview] = useState(null);
     const [isLoadingPreview, setIsLoadingPreview] = useState(false);
     const [showRenameModal, setShowRenameModal] = useState(false);
@@ -122,6 +134,19 @@ function App() {
     const [photoMetadata, setPhotoMetadata] = useState(null);
     const [newFolderName, setNewFolderName] = useState(() => formatFolderTimestamp(new Date()));
     const [folderNameEdited, setFolderNameEdited] = useState(false);
+
+    useEffect(() => {
+        if (typeof window.matchMedia !== 'function') return;
+        const mq = window.matchMedia(MOBILE_MEDIA_QUERY);
+        const onChange = (e) => setIsMobile(e.matches);
+        if (mq.addEventListener) {
+            mq.addEventListener('change', onChange);
+            return () => mq.removeEventListener('change', onChange);
+        }
+        // Safari < 14
+        mq.addListener(onChange);
+        return () => mq.removeListener(onChange);
+    }, []);
 
     // Keep the destination folder prefill ticking with the current time until
     // the user touches it, so an untouched field always matches the moment
@@ -756,8 +781,54 @@ function App() {
         ? [photoMetadata.shutter_speed, photoMetadata.aperture, photoMetadata.iso, photoMetadata.focal_length].filter(Boolean)
         : [];
 
+    // Touch gestures on the photo (mobile only): swipe left/right to
+    // navigate, double-tap to select. Unselect goes through the button in
+    // the mobile action bar, so a stray extra tap can't undo a selection.
+    const handlePhotoTouchStart = (e) => {
+        if (!isMobile || e.touches.length !== 1) {
+            touchStartRef.current = null;
+            return;
+        }
+        const t = e.touches[0];
+        touchStartRef.current = { x: t.clientX, y: t.clientY, time: Date.now() };
+    };
+
+    const handlePhotoTouchEnd = (e) => {
+        const start = touchStartRef.current;
+        touchStartRef.current = null;
+        if (!isMobile || !start) return;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - start.x;
+        const dy = t.clientY - start.y;
+        const elapsed = Date.now() - start.time;
+
+        if (elapsed < 600 && Math.abs(dx) > 60 && Math.abs(dy) < 60) {
+            lastTapRef.current = { time: 0, x: 0, y: 0 };
+            navigate(dx < 0 ? 1 : -1);
+            return;
+        }
+
+        // A quick tap with no drag; two of them close together is a double-tap
+        if (elapsed < 350 && Math.abs(dx) < 12 && Math.abs(dy) < 12) {
+            const now = Date.now();
+            const last = lastTapRef.current;
+            const isDoubleTap = now - last.time < 350
+                && Math.abs(t.clientX - last.x) < 50
+                && Math.abs(t.clientY - last.y) < 50;
+            if (isDoubleTap) {
+                lastTapRef.current = { time: 0, x: 0, y: 0 };
+                if (currentPhotoName && !isSaved) {
+                    e.preventDefault(); // suppress the browser's double-tap zoom
+                    handleSelection(currentPhotoName, true);
+                }
+            } else {
+                lastTapRef.current = { time: now, x: t.clientX, y: t.clientY };
+            }
+        }
+    };
+
     return (
-        <div className={`App ${isFullscreen ? 'fullscreen-mode' : ''}`}>
+        <div className={`App ${isFullscreen ? 'fullscreen-mode' : ''} ${isMobile && currentPhotoName && (isSelected || isSaved) ? 'mobile-panel-open' : ''}`}>
             <ToastContainer position="bottom-center" autoClose={5000} hideProgressBar={false} newestOnTop={false} closeOnClick rtl={false} pauseOnFocusLoss draggable pauseOnHover theme="dark" />
             {isFullscreen && currentPhotoName && (
                 <div className="fullscreen-overlay">
@@ -1110,7 +1181,11 @@ function App() {
                         ) : (
                             <>
                                 {filteredPhotos.length > 0 ? (
-                                    <div className="main-photo-area">
+                                    <div
+                                        className="main-photo-area"
+                                        onTouchStart={handlePhotoTouchStart}
+                                        onTouchEnd={handlePhotoTouchEnd}
+                                    >
                                         {currentPhotoName && (
                                             <div className="photo-filename-overlay">
                                                 <div className="filename">{currentPhotoName}</div>
@@ -1269,6 +1344,85 @@ function App() {
                     )}
                 </div>
             </main>
+
+            {isMobile && photos.length > 0 && (
+                <div className="mobile-action-bar">
+                    {currentPhotoName && (isSelected || isSaved) && (
+                        <div className="mobile-selected-panel">
+                            <div className="mobile-selected-info">
+                                <span className={`mobile-selected-status ${isSaved ? 'status-saved' : 'status-selected'}`}>
+                                    {isSaved ? 'SAVED' : 'SELECTED'}
+                                </span>
+                                <span className="mobile-selected-filename">{currentPhotoName}</span>
+                                <span className="mobile-selected-meta">
+                                    {currentIndex + 1} / {filteredPhotos.length}
+                                    {metadataParts.length > 0 ? ` · ${metadataParts.join(' · ')}` : ''}
+                                </span>
+                                <span className="mobile-selected-counts">
+                                    {selectedPhotos.size} unsaved · {exportStatus.selected_count} saved
+                                    {exportStatus.missing_count > 0 ? ` · ${exportStatus.missing_count} raw missing` : ''}
+                                </span>
+                            </div>
+                            <div className="mobile-selected-actions">
+                                {!isSaved && (
+                                    <button
+                                        className="mobile-unselect-button"
+                                        onClick={() => handleSelection(currentPhotoName, false)}
+                                    >
+                                        ✕ Unselect
+                                    </button>
+                                )}
+                                <button
+                                    className="mobile-save-button"
+                                    onClick={handleSave}
+                                    disabled={selectedPhotos.size === 0}
+                                >
+                                    Save ({selectedPhotos.size})
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    <div className="mobile-nav-row">
+                        <button
+                            className="mobile-nav-button"
+                            onClick={() => navigate(-1)}
+                            disabled={filteredPhotos.length === 0}
+                            aria-label="Previous photo"
+                        >
+                            ←
+                        </button>
+                        <div className="mobile-nav-center">
+                            {currentPhotoName ? (
+                                <>
+                                    <span className="mobile-nav-position">{currentIndex + 1} / {filteredPhotos.length}</span>
+                                    {!isSelected && !isSaved && (
+                                        <span className="mobile-nav-hint">
+                                            {isDeleted ? 'Marked for deletion' : 'Double-tap photo to select'}
+                                        </span>
+                                    )}
+                                </>
+                            ) : (
+                                <span className="mobile-nav-hint">No photos</span>
+                            )}
+                        </div>
+                        <button
+                            className={`mobile-grid-button ${showThumbnailView ? 'active' : ''}`}
+                            onClick={() => setShowThumbnailView(!showThumbnailView)}
+                            aria-label="Toggle thumbnail view"
+                        >
+                            ▦
+                        </button>
+                        <button
+                            className="mobile-nav-button"
+                            onClick={() => navigate(1)}
+                            disabled={filteredPhotos.length === 0}
+                            aria-label="Next photo"
+                        >
+                            →
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

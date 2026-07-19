@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -380,8 +381,55 @@ func (fs *spaFileSystem) Open(name string) (http.File, error) {
 	return f, err
 }
 
+// printConnectionInfo lists the URLs the server is reachable at, including
+// the LAN addresses another device on the same Wi-Fi (e.g. a phone) can use.
+func printConnectionInfo(host, port string) {
+	fmt.Println()
+	fmt.Println("========================================")
+	fmt.Println(" Camera Rip is running")
+	fmt.Println("========================================")
+	fmt.Printf("  On this machine:  http://localhost:%s\n", port)
+
+	// A specific bind address is only reachable at that address
+	if host != "" && host != "0.0.0.0" && host != "::" {
+		fmt.Printf("  Bound to:         http://%s\n", net.JoinHostPort(host, port))
+		fmt.Println("========================================")
+		return
+	}
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		log.Printf("Could not list network interfaces: %v", err)
+		return
+	}
+	lanURLs := []string{}
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() {
+			continue
+		}
+		ip := ipNet.IP.To4()
+		if ip == nil || ipNet.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		lanURLs = append(lanURLs, fmt.Sprintf("http://%s:%s", ip, port))
+	}
+	if len(lanURLs) > 0 {
+		fmt.Println("  On your phone (same Wi-Fi):")
+		for _, u := range lanURLs {
+			fmt.Printf("      %s\n", u)
+		}
+	} else {
+		fmt.Println("  No LAN address found - is Wi-Fi/Ethernet connected?")
+	}
+	fmt.Println("========================================")
+	fmt.Println()
+}
+
 func main() {
 	devMode := flag.Bool("dev", false, "Run in development mode (do not serve static files)")
+	host := flag.String("host", "0.0.0.0", "Address to listen on (0.0.0.0 = every interface, so other devices on the network can connect)")
+	port := flag.String("port", "5001", "Port to listen on")
 	flag.Parse()
 
 	userHomeDir, err := os.UserHomeDir()
@@ -426,8 +474,10 @@ func main() {
 		log.Println("Running in dev mode. Frontend not served at root. Access via localhost:3000")
 	}
 
-	log.Println("Starting server on :5001")
-	if err := http.ListenAndServe(":5001", nil); err != nil {
+	listenAddr := net.JoinHostPort(*host, *port)
+	log.Printf("Starting server on %s", listenAddr)
+	printConnectionInfo(*host, *port)
+	if err := http.ListenAndServe(listenAddr, nil); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }

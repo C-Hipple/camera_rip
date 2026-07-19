@@ -1,11 +1,24 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import App from './App';
 
 const originalFetch = global.fetch;
 afterEach(() => {
   localStorage.clear();
   global.fetch = originalFetch;
+  // jsdom has no matchMedia; tests that fake a phone viewport define it
+  delete window.matchMedia;
 });
+
+// jsdom leaves matchMedia undefined, so the app renders desktop by default.
+// Defining it with matches: true switches the app to the mobile layout.
+const fakeMobileViewport = () => {
+  window.matchMedia = (query) => ({
+    matches: true,
+    media: query,
+    addEventListener: () => { },
+    removeEventListener: () => { },
+  });
+};
 
 const mockApi = ({ photos = [], saved = [] } = {}) => {
   const jsonResponse = (data) => Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
@@ -54,6 +67,33 @@ test('restores unsaved selections and deletion marks from localStorage', async (
   // already-saved.JPG is on disk already, so both are dropped.
   expect(await screen.findByRole('button', { name: /Save 1 new selections/i })).toBeInTheDocument();
   expect(await screen.findByRole('option', { name: /Marked for Deletion \(1\)/i })).toBeInTheDocument();
+});
+
+test('mobile: double-tap selects the photo and the action bar unselects it', async () => {
+  fakeMobileViewport();
+  mockApi({ photos: ['100_IMG_0001.JPG', '100_IMG_0002.JPG'] });
+  const { container } = render(<App />);
+  await screen.findByRole('option', { name: /All Images \(2\)/i });
+  expect(screen.getByText(/Double-tap photo to select/i)).toBeInTheDocument();
+
+  const photoArea = container.querySelector('.main-photo-area');
+  const tap = () => {
+    fireEvent.touchStart(photoArea, { touches: [{ clientX: 100, clientY: 100 }] });
+    fireEvent.touchEnd(photoArea, { changedTouches: [{ clientX: 100, clientY: 100 }] });
+  };
+
+  // A single tap must not select
+  tap();
+  expect(container.querySelector('.mobile-selected-panel')).toBeNull();
+
+  // The second tap completes the double-tap and opens the selected panel
+  tap();
+  await waitFor(() => expect(container.querySelector('.mobile-selected-panel')).toBeInTheDocument());
+  expect(screen.getByRole('button', { name: /Save \(1\)/i })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: '✕ Unselect' }));
+  await waitFor(() => expect(container.querySelector('.mobile-selected-panel')).toBeNull());
+  expect(screen.getByText(/Double-tap photo to select/i)).toBeInTheDocument();
 });
 
 test('stashes selections to localStorage as they are made', async () => {
