@@ -89,3 +89,46 @@
 
 
 
+
+/* Stacked label + input rows, used by the gallery upload form */
+.modal-field-label {
+    display: block;
+    color: #a89984; /* Gruvbox Gray */
+    font-size: 0.85rem;
+    margin: 0 0 6px 0;
+}
+
+.modal-input-stacked {
+    margin: 0 0 15px 0;
+}
+
+.modal-input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.modal-hint {
+    color: #a89984; /* Gruvbox Gray */
+    font-size: 0.8rem;
+    line-height: 1.4;
+    margin: 0 0 25px 0;
+}
+
+.modal-hint code {
+    color: #d79921; /* Gruvbox Yellow */
+}
+
+.modal-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.modal-button-upload {
+    background-color: #458588; /* Gruvbox Blue */
+    color: #ebdbb2;
+    border-color: #458588;
+}
+
+.modal-button-upload:hover:not(:disabled) {
+    background-color: #076678; /* Darker blue */
+}

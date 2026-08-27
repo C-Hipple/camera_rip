@@ -20,16 +20,24 @@ const fakeMobileViewport = () => {
   });
 };
 
-const mockApi = ({ photos = [], saved = [] } = {}) => {
-  const jsonResponse = (data) => Promise.resolve({ ok: true, json: () => Promise.resolve(data) });
+const mockApi = ({ photos = [], saved = [], gallery = null, upload = null } = {}) => {
+  const jsonResponse = (data, ok = true) => Promise.resolve({ ok, json: () => Promise.resolve(data) });
   global.fetch = jest.fn((url) => {
     const path = String(url);
     if (path.includes('/api/directories')) return jsonResponse(['session-1']);
     if (path.includes('/api/photos?')) return jsonResponse(photos);
     if (path.includes('/api/selected-photos')) return jsonResponse(saved);
     if (path.includes('/api/export-status')) return jsonResponse({ selected_count: saved.length, raw_count: 0, missing_count: 0 });
+    if (path.includes('/api/gallery-config')) return jsonResponse(gallery || { configured: false, base_url: '' });
+    if (path.includes('/api/gallery-upload')) return jsonResponse(upload || { status: 'uploaded', url: '' });
     return jsonResponse({});
   });
+};
+
+// The body of the nth POST the app made to the given endpoint.
+const postedTo = (endpoint) => {
+  const call = global.fetch.mock.calls.find(([url]) => String(url).includes(endpoint));
+  return call ? JSON.parse(call[1].body) : null;
 };
 
 test('renders photo selector app', () => {
@@ -107,4 +115,43 @@ test('stashes selections to localStorage as they are made', async () => {
     selected: ['100_IMG_0001.JPG'],
     deleted: [],
   });
+});
+
+test('gallery upload button is hidden until a photo is selected, and posts title and hashtags', async () => {
+  mockApi({
+    photos: ['100_IMG_0001.JPG', '100_IMG_0002.JPG'],
+    gallery: { configured: true, base_url: 'https://gallery.example' },
+    upload: { status: 'uploaded', url: 'https://gallery.example/p/42' },
+  });
+  render(<App />);
+  await screen.findByRole('option', { name: /All Images \(2\)/i });
+
+  // Nothing selected yet, so there is nothing to upload
+  expect(screen.queryByRole('button', { name: /Upload to Gallery/i })).not.toBeInTheDocument();
+
+  fireEvent.keyDown(window, { key: 's' });
+  const uploadButton = await screen.findByRole('button', { name: /Upload to Gallery/i });
+  fireEvent.click(uploadButton);
+
+  fireEvent.change(await screen.findByLabelText(/Title/i), { target: { value: 'Sunrise' } });
+  fireEvent.change(screen.getByLabelText(/Hashtags/i), { target: { value: '#film #mono' } });
+  fireEvent.click(screen.getByRole('button', { name: /^Upload$/i }));
+
+  await waitFor(() => expect(postedTo('/api/gallery-upload')).toEqual({
+    directory: 'session-1',
+    filename: '100_IMG_0001.JPG',
+    title: 'Sunrise',
+    tags: '#film #mono',
+  }));
+  // A successful upload closes the modal
+  await waitFor(() => expect(screen.queryByLabelText(/Hashtags/i)).not.toBeInTheDocument());
+});
+
+test('gallery upload button stays hidden when the backend has no gallery configured', async () => {
+  mockApi({ photos: ['100_IMG_0001.JPG'], gallery: { configured: false, base_url: '' } });
+  render(<App />);
+  await screen.findByRole('option', { name: /All Images \(1\)/i });
+  fireEvent.keyDown(window, { key: 's' });
+  await screen.findByRole('button', { name: /Save 1 new selections/i });
+  expect(screen.queryByRole('button', { name: /Upload to Gallery/i })).not.toBeInTheDocument();
 });

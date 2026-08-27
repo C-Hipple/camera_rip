@@ -5,6 +5,7 @@ import './App.css';
 import PhotoViewer from './PhotoViewer';
 import ConfirmModal from './ConfirmModal';
 import RenameModal from './RenameModal';
+import GalleryUploadModal from './GalleryUploadModal';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
@@ -134,6 +135,10 @@ function App() {
     const [photoMetadata, setPhotoMetadata] = useState(null);
     const [newFolderName, setNewFolderName] = useState(() => formatFolderTimestamp(new Date()));
     const [folderNameEdited, setFolderNameEdited] = useState(false);
+    const [galleryConfig, setGalleryConfig] = useState({ configured: false, base_url: '' });
+    // Holds the filename being uploaded; a non-null value opens the modal.
+    const [galleryUploadPhoto, setGalleryUploadPhoto] = useState(null);
+    const [isUploadingToGallery, setIsUploadingToGallery] = useState(false);
 
     useEffect(() => {
         if (typeof window.matchMedia !== 'function') return;
@@ -201,6 +206,16 @@ function App() {
     useEffect(() => {
         fetchDirectories();
     }, [fetchDirectories]);
+
+    // Upload to Gallery only appears once the backend has both
+    // GALLERY_BASE_URL and GALLERY_PASSWORD in its environment.
+    useEffect(() => {
+        const disabled = { configured: false, base_url: '' };
+        fetch(`${API_URL}/api/gallery-config`)
+            .then(res => res.json())
+            .then(data => setGalleryConfig(data && data.configured ? data : disabled))
+            .catch(() => setGalleryConfig(disabled));
+    }, []);
 
     const fetchImportPreview = useCallback(async () => {
         setIsLoadingPreview(true);
@@ -622,6 +637,44 @@ function App() {
         setIsRenaming(false);
     };
 
+    // Post one selected photo to the gallery. The backend holds the gallery
+    // password and does the actual upload, so only the photo's identity and
+    // the title/tags typed into the modal are sent from here. The modal stays
+    // open on failure so a rejected upload can be retried without retyping.
+    const handleGalleryUpload = async ({ title, tags }) => {
+        const filename = galleryUploadPhoto;
+        if (!filename) return;
+        setIsUploadingToGallery(true);
+        const toastId = toast.loading(`Uploading ${filename} to gallery...`);
+        try {
+            const response = await fetch(`${API_URL}/api/gallery-upload`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    directory: currentDirectory,
+                    filename,
+                    title,
+                    tags
+                })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (response.ok) {
+                const message = data.url
+                    ? <span>Uploaded {filename} — <a href={data.url} target="_blank" rel="noreferrer">view in gallery</a></span>
+                    : `Uploaded ${filename} to the gallery`;
+                toast.update(toastId, { render: message, type: "success", isLoading: false, autoClose: 8000 });
+                setGalleryUploadPhoto(null);
+            } else {
+                toast.update(toastId, { render: data.error || 'Failed to upload to the gallery.', type: "error", isLoading: false, autoClose: 8000 });
+            }
+        } catch (err) {
+            toast.update(toastId, { render: "Failed to upload to the gallery.", type: "error", isLoading: false, autoClose: 5000 });
+        }
+        setIsUploadingToGallery(false);
+    };
+
     // Filter photos based on carousel filter mode
     const filteredPhotos = React.useMemo(() => {
         if (carouselFilter === 'selected') {
@@ -751,6 +804,9 @@ function App() {
     const isPinnedSelected = pinnedPhoto ? selectedPhotos.has(pinnedPhoto) : false;
     const isPinnedSaved = pinnedPhoto ? savedPhotos.has(pinnedPhoto) : false;
     const isPinnedDeleted = pinnedPhoto ? deletedPhotos.has(pinnedPhoto) : false;
+    // A photo counts as selected for upload whether the mark is still unsaved
+    // or already written to the selected/ folder on disk.
+    const canUploadToGallery = Boolean(galleryConfig.configured && currentPhotoName && (isSelected || isSaved));
 
     // Fetch EXIF camera settings (shutter speed, aperture, ISO, focal length)
     // for the photo on display. The cancelled flag drops stale responses when
@@ -863,6 +919,14 @@ function App() {
                             {isDeleted ? 'Unmark Delete (d)' : 'Mark Delete (d)'}
                         </button>
                         <button onClick={() => navigate(1)}>→ (k)</button>
+                        {canUploadToGallery && (
+                            <button
+                                onClick={() => setGalleryUploadPhoto(currentPhotoName)}
+                                disabled={isUploadingToGallery}
+                                className="upload-gallery-button">
+                                {isUploadingToGallery ? 'Uploading...' : 'Upload to Gallery'}
+                            </button>
+                        )}
                         <button onClick={() => setIsFullscreen(false)} className="fullscreen-exit">Exit Fullscreen (f / Esc)</button>
                     </div>
                 </div>
@@ -903,6 +967,14 @@ function App() {
                 onConfirm={handleRenameDirectory}
                 initialValue={currentDirectory}
                 isBusy={isRenaming}
+            />
+            <GalleryUploadModal
+                isOpen={Boolean(galleryUploadPhoto)}
+                onClose={() => { if (!isUploadingToGallery) setGalleryUploadPhoto(null); }}
+                onConfirm={handleGalleryUpload}
+                photoName={galleryUploadPhoto}
+                galleryUrl={galleryConfig.base_url}
+                isBusy={isUploadingToGallery}
             />
 
             <div className={`bottom-left-controls ${isSidebarCollapsed ? 'collapsed' : ''}`}>
@@ -1326,6 +1398,14 @@ function App() {
                         className="export-raw-button">
                         {isExportingRaw ? 'Exporting...' : `Export Raw Files (${exportStatus.missing_count} missing)`}
                     </button>
+                    {canUploadToGallery && (
+                        <button
+                            onClick={() => setGalleryUploadPhoto(currentPhotoName)}
+                            disabled={isUploadingToGallery}
+                            className="upload-gallery-button">
+                            {isUploadingToGallery ? 'Uploading...' : 'Upload to Gallery'}
+                        </button>
+                    )}
                     {carouselFilter === 'deleted' && deletedPhotos.size > 0 && (
                         <button
                             onClick={() => setShowDeletePhotosModal(true)}
@@ -1379,6 +1459,15 @@ function App() {
                                 >
                                     Save ({selectedPhotos.size})
                                 </button>
+                                {canUploadToGallery && (
+                                    <button
+                                        className="mobile-upload-button"
+                                        onClick={() => setGalleryUploadPhoto(currentPhotoName)}
+                                        disabled={isUploadingToGallery}
+                                    >
+                                        {isUploadingToGallery ? 'Uploading...' : '↑ Upload to Gallery'}
+                                    </button>
+                                )}
                             </div>
                         </div>
                     )}

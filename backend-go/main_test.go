@@ -2,8 +2,13 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -281,5 +286,221 @@ func TestFormatShutterSpeed(t *testing.T) {
 		if got := formatShutterSpeed(tt.num, tt.den); got != tt.want {
 			t.Errorf("formatShutterSpeed(%d, %d) = %q, want %q", tt.num, tt.den, got, tt.want)
 		}
+	}
+}
+
+func TestNormalizeTags(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"film, golden hour", "film, golden hour"},
+		{"#film #mono", "film, mono"},
+		{"  film ,  , mono ", "film, mono"},
+		{"#film, golden hour, #mono", "film, golden hour, mono"},
+		{"film, Film, FILM", "film"},
+		{"#golden hour", "golden hour"},
+		{"", ""},
+		{"   ", ""},
+		{"#", ""},
+	}
+	for _, tt := range tests {
+		if got := normalizeTags(tt.input); got != tt.want {
+			t.Errorf("normalizeTags(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestGalleryPhotoURL(t *testing.T) {
+	galleryBaseURL = "https://gallery.example"
+	tests := []struct {
+		name   string
+		parsed map[string]interface{}
+		want   string
+	}{
+		{"absolute url", map[string]interface{}{"url": "https://gallery.example/p/42"}, "https://gallery.example/p/42"},
+		{"relative url", map[string]interface{}{"url": "/p/42"}, "https://gallery.example/p/42"},
+		{"page preferred over image", map[string]interface{}{"url": "/i/42.jpg", "page_url": "/p/42"}, "https://gallery.example/p/42"},
+		{"nested urls object", map[string]interface{}{"urls": map[string]interface{}{"page": "/p/42"}}, "https://gallery.example/p/42"},
+		{"no url at all", map[string]interface{}{"id": "42"}, ""},
+		{"empty response", map[string]interface{}{}, ""},
+	}
+	for _, tt := range tests {
+		if got := galleryPhotoURL(tt.parsed); got != tt.want {
+			t.Errorf("%s: galleryPhotoURL() = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestGalleryErrorMessage(t *testing.T) {
+	if got := galleryErrorMessage(400, map[string]interface{}{"error": "no file"}, []byte(`{"error":"no file"}`)); got != "no file" {
+		t.Errorf("galleryErrorMessage() = %q, want the gallery's own error", got)
+	}
+	if got := galleryErrorMessage(401, map[string]interface{}{}, nil); !strings.Contains(got, "password") {
+		t.Errorf("galleryErrorMessage(401) = %q, want a message about the password", got)
+	}
+	if got := galleryErrorMessage(500, map[string]interface{}{}, []byte("boom")); !strings.Contains(got, "boom") {
+		t.Errorf("galleryErrorMessage(500) = %q, want the response body included", got)
+	}
+}
+
+// galleryUploadRequest is what the fake gallery saw on its /api/upload route.
+type galleryUploadRequest struct {
+	password string
+	title    string
+	tags     string
+	filename string
+	body     []byte
+}
+
+// newFakeGallery stands in for the gallery API, recording the multipart upload
+// it receives and answering with the given status and JSON body.
+func newFakeGallery(t *testing.T, status int, response string, got *galleryUploadRequest) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/upload" {
+			t.Errorf("gallery got request for %q, want /api/upload", r.URL.Path)
+		}
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Errorf("gallery could not parse multipart body: %v", err)
+			return
+		}
+		got.password = r.FormValue("password")
+		got.title = r.FormValue("title")
+		got.tags = r.FormValue("tags")
+		if file, header, err := r.FormFile("photo"); err == nil {
+			defer file.Close()
+			got.filename = header.Filename
+			got.body, _ = io.ReadAll(file)
+		} else {
+			t.Errorf("gallery got no 'photo' file: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write([]byte(response))
+	}))
+}
+
+// withTestPhoto points photoBaseDir at a temp directory holding one photo.
+func withTestPhoto(t *testing.T, name string, contents []byte) (directory string) {
+	t.Helper()
+	photoBaseDir = t.TempDir()
+	directory = "2026-01-01_batch"
+	dir := filepath.Join(photoBaseDir, directory)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), contents, 0644); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+func postGalleryUpload(t *testing.T, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/gallery-upload", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	galleryUploadHandler(w, req)
+	return w
+}
+
+func TestGalleryUploadHandler(t *testing.T) {
+	var got galleryUploadRequest
+	server := newFakeGallery(t, http.StatusCreated, `{"id":"42","page_url":"/p/42"}`, &got)
+	defer server.Close()
+
+	directory := withTestPhoto(t, "100_IMG_0001.JPG", []byte("jpeg-bytes"))
+	galleryBaseURL = server.URL
+	galleryPassword = "hunter2"
+
+	w := postGalleryUpload(t, `{"directory":"`+directory+`","filename":"100_IMG_0001.JPG","title":"Sunrise","tags":"#film #mono"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("gallery upload returned %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	if got.password != "hunter2" {
+		t.Errorf("gallery received password %q, want %q", got.password, "hunter2")
+	}
+	if got.title != "Sunrise" {
+		t.Errorf("gallery received title %q, want %q", got.title, "Sunrise")
+	}
+	if got.tags != "film, mono" {
+		t.Errorf("gallery received tags %q, want %q", got.tags, "film, mono")
+	}
+	if got.filename != "100_IMG_0001.JPG" {
+		t.Errorf("gallery received filename %q, want %q", got.filename, "100_IMG_0001.JPG")
+	}
+	if string(got.body) != "jpeg-bytes" {
+		t.Errorf("gallery received body %q, want the photo's bytes", got.body)
+	}
+
+	var reply struct {
+		Status string `json:"status"`
+		URL    string `json:"url"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("could not decode reply: %v", err)
+	}
+	if reply.Status != "uploaded" {
+		t.Errorf("reply status = %q, want %q", reply.Status, "uploaded")
+	}
+	if reply.URL != server.URL+"/p/42" {
+		t.Errorf("reply url = %q, want %q", reply.URL, server.URL+"/p/42")
+	}
+}
+
+func TestGalleryUploadHandlerRelaysGalleryErrors(t *testing.T) {
+	var got galleryUploadRequest
+	server := newFakeGallery(t, http.StatusUnauthorized, `{"error":"wrong password"}`, &got)
+	defer server.Close()
+
+	directory := withTestPhoto(t, "100_IMG_0001.JPG", []byte("jpeg-bytes"))
+	galleryBaseURL = server.URL
+	galleryPassword = "wrong"
+
+	w := postGalleryUpload(t, `{"directory":"`+directory+`","filename":"100_IMG_0001.JPG"}`)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("gallery upload returned %d, want the gallery's 401", w.Code)
+	}
+	var reply struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("could not decode reply: %v", err)
+	}
+	if reply.Error != "wrong password" {
+		t.Errorf("reply error = %q, want the gallery's own message", reply.Error)
+	}
+	if got.title != "" || got.tags != "" {
+		t.Errorf("optional fields were sent empty rather than omitted: title=%q tags=%q", got.title, got.tags)
+	}
+}
+
+func TestGalleryUploadHandlerRejectsBadRequests(t *testing.T) {
+	directory := withTestPhoto(t, "100_IMG_0001.JPG", []byte("jpeg-bytes"))
+	galleryBaseURL = "https://gallery.example"
+	galleryPassword = "hunter2"
+
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"missing filename", `{"directory":"` + directory + `"}`, http.StatusBadRequest},
+		{"missing directory", `{"filename":"100_IMG_0001.JPG"}`, http.StatusBadRequest},
+		{"path traversal", `{"directory":"` + directory + `","filename":"../../secret.jpg"}`, http.StatusBadRequest},
+		{"unreadable photo", `{"directory":"` + directory + `","filename":"nope.JPG"}`, http.StatusBadRequest},
+		{"malformed json", `{`, http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		if w := postGalleryUpload(t, tt.body); w.Code != tt.want {
+			t.Errorf("%s: returned %d, want %d (%s)", tt.name, w.Code, tt.want, w.Body.String())
+		}
+	}
+
+	// With no gallery configured the endpoint says so rather than trying.
+	galleryBaseURL, galleryPassword = "", ""
+	if w := postGalleryUpload(t, `{"directory":"`+directory+`","filename":"100_IMG_0001.JPG"}`); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("unconfigured gallery returned %d, want 503", w.Code)
 	}
 }

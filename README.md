@@ -11,6 +11,7 @@ A web-based application for importing photos from your camera's SD card, reviewi
 - **Batch Export**: Copy selected JPEGs to an export folder
 - **Raw File Export**: Copy corresponding raw files (Canon CR3, Olympus ORF) directly from SD card for selected photos
 - **Export Status Tracking**: Track how many raw files have been exported vs. how many are missing
+- **Upload to a Gallery**: Post a selected photo straight to a photo gallery with a title and hashtags
 
 ## Screenshot
 
@@ -65,6 +66,28 @@ make run      # Run the application
 
 The application will be available at `http://localhost:5001`
 
+### 4. Optional: Connect a Photo Gallery
+
+To enable the **Upload to Gallery** button, set two environment variables before
+starting the server:
+
+| Variable | Example | What it is |
+| --- | --- | --- |
+| `GALLERY_BASE_URL` | `https://gallery.example.com` | The gallery's root URL. Uploads go to `<base>/api/upload`. |
+| `GALLERY_PASSWORD` | `hunter2` | The same password you sign in to the gallery with. |
+
+```bash
+GALLERY_BASE_URL=https://gallery.example.com GALLERY_PASSWORD=hunter2 make run
+```
+
+The password stays on the server: the browser asks the Go backend to perform the
+upload, so the gallery password is never sent to the page. Use an `https://` base
+URL — the gallery API carries the password in the request body, and the server
+logs a warning at startup if the URL is plain HTTP.
+
+If either variable is unset the feature stays switched off and the button is
+hidden.
+
 ### Quick Development Run
 
 For quick testing without building a binary, you can also run:
@@ -111,6 +134,18 @@ The frontend is embedded directly into the Go binary using Go's `embed` package.
 4. Raw files are copied to `~/Pictures/photos/[timestamp]/selected/raw/`
 5. The button shows how many raw files are missing
 6. Export status is displayed below the controls
+
+### 4. Upload to a Gallery
+
+1. Select (or save) a photo, then click **Upload to Gallery**
+2. Give it a title and hashtags — both optional
+   - `#film #goldenhour` splits on the hashes
+   - `film, golden hour` splits on the commas, so multi-word tags survive
+3. Click **Upload**; a link to the published photograph appears in the toast
+
+The photo is posted to `<GALLERY_BASE_URL>/api/upload` as `multipart/form-data`.
+RAW files are uploaded as their embedded JPEG preview, since galleries take JPEG,
+PNG and GIF only.
 
 ## Keyboard Shortcuts
 

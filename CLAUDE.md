@@ -39,6 +39,8 @@ cd frontend && npx react-scripts test --watchAll=false  # Frontend tests
 **Supporting frontend files:**
 - `frontend/src/PhotoViewer.js` — Image display with zoom/pan
 - `frontend/src/ConfirmModal.js` — Reusable confirmation dialog
+- `frontend/src/RenameModal.js` — Single-field prompt for renaming a session folder
+- `frontend/src/GalleryUploadModal.js` — Title/hashtag form shown before a gallery upload
 
 **Build pipeline:** React build output is copied into `backend-go/frontend/` and embedded into the Go binary via `//go:embed all:frontend/build`. The Makefile orchestrates this.
 
@@ -50,10 +52,11 @@ cd frontend && npx react-scripts test --watchAll=false  # Frontend tests
 - **Device detection:** Looks for mounted volumes at `/Volumes` (macOS) or `/media` (Linux), then scans for supported camera DCIM folders (Canon `*CANON`, Olympus `*OLYMP` and `*OMSYS`)
 - **Brand registry:** The `supportedBrands` table near the top of `main.go` pairs each DCIM folder suffix with its RAW extension. Add a row to support a new brand.
 - **Server port:** 5001
+- **Gallery upload:** `GALLERY_BASE_URL` and `GALLERY_PASSWORD` (read at startup by `loadGalleryConfig()`) point at a photo gallery exposing `POST /api/upload`. Both must be set or `/api/gallery-config` reports `configured: false` and the frontend hides the Upload to Gallery button. The backend does the upload so the password never reaches the browser; `normalizeTags()` canonicalises the hashtag field into the comma separated list the gallery expects.
 
 ## API Endpoints
 
-Key routes in `main.go`: `/api/import`, `/api/photos`, `/api/save`, `/api/export-raw`, `/api/export-raw-single`, `/api/delete-imported`, `/api/delete-photos`, `/api/sd-cleanup`, `/api/directories`, `/api/rename-directory`, `/api/selected-photos`, `/api/export-status`. Photos served at `/photos/` and thumbnails at `/thumbnail/`.
+Key routes in `main.go`: `/api/import`, `/api/photos`, `/api/save`, `/api/export-raw`, `/api/export-raw-single`, `/api/delete-imported`, `/api/delete-photos`, `/api/sd-cleanup`, `/api/directories`, `/api/rename-directory`, `/api/selected-photos`, `/api/export-status`, `/api/gallery-config`, `/api/gallery-upload`. Photos served at `/photos/` and thumbnails at `/thumbnail/`.
 
 ## Adding Support for Other Camera Brands
 
