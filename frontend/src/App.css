@@ -908,7 +908,7 @@
 }
 
 /* --- Fullscreen Mode --- */
-.App.fullscreen-mode > *:not(.fullscreen-overlay):not([class*="Toastify"]) {
+.App.fullscreen-mode > *:not(.fullscreen-overlay):not(.modal-overlay):not([class*="Toastify"]) {
   display: none !important;
 }
 
@@ -1149,6 +1149,24 @@
 }
 
 .mobile-save-button:disabled {
+  background-color: #7c6f64;
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mobile-upload-button {
+  background-color: #b16286;
+  /* Gruvbox Purple */
+  color: #ebdbb2;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-weight: bold;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.mobile-upload-button:disabled {
   background-color: #7c6f64;
   opacity: 0.6;
   cursor: not-allowed;

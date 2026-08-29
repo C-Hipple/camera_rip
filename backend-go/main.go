@@ -13,8 +13,10 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"log"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,6 +37,13 @@ var (
 	photoBaseDir      string
 	thumbnailCacheDir string
 	thumbnailSize     = 200
+)
+
+// Gallery upload settings, read from the environment at startup. The password
+// stays on this side of the wire: the browser never sees it.
+var (
+	galleryBaseURL  string
+	galleryPassword string
 )
 
 type cameraBrand struct {
@@ -446,6 +455,8 @@ func main() {
 		log.Fatalf("Failed to create thumbnail cache directory: %v", err)
 	}
 
+	loadGalleryConfig()
+
 	http.HandleFunc("/api/directories", corsHandler(listDirectoriesHandler))
 	http.HandleFunc("/api/photos", corsHandler(getPhotosHandler))
 	http.HandleFunc("/api/save", corsHandler(saveSelectedPhotosHandler))
@@ -460,6 +471,8 @@ func main() {
 	http.HandleFunc("/api/delete-photos", corsHandler(deletePhotosHandler))
 	http.HandleFunc("/api/rename-directory", corsHandler(renameDirectoryHandler))
 	http.HandleFunc("/api/photo-metadata", corsHandler(photoMetadataHandler))
+	http.HandleFunc("/api/gallery-config", corsHandler(galleryConfigHandler))
+	http.HandleFunc("/api/gallery-upload", corsHandler(galleryUploadHandler))
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
 
@@ -1553,6 +1566,308 @@ func exportStatusHandler(w http.ResponseWriter, r *http.Request) {
 		"selected_count": selectedCount,
 		"raw_count":      rawCount,
 		"missing_count":  missingCount,
+	})
+}
+
+// --- Gallery upload ---
+//
+// Selected photographs can be posted straight to a photo gallery that exposes
+// the documented multipart POST /api/upload endpoint. The gallery's address and
+// password come from the environment (GALLERY_BASE_URL / GALLERY_PASSWORD) and
+// the password never reaches the browser: the frontend asks this server to do
+// the upload, and only the password-free parts (title, tags) travel with it.
+
+const (
+	galleryUploadPath    = "/api/upload"
+	galleryUploadTimeout = 2 * time.Minute
+	// Enough for the gallery's JSON answer; guards against a misconfigured
+	// base URL pointing at something that streams forever.
+	galleryResponseLimit = 1 << 20
+)
+
+// quoteEscaper escapes the two characters that would break out of a
+// Content-Disposition filename parameter.
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+
+func loadGalleryConfig() {
+	galleryBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("GALLERY_BASE_URL")), "/")
+	galleryPassword = os.Getenv("GALLERY_PASSWORD")
+
+	if !galleryConfigured() {
+		log.Println("Gallery uploads disabled (set GALLERY_BASE_URL and GALLERY_PASSWORD to enable)")
+		return
+	}
+	log.Printf("Gallery uploads enabled: %s%s", galleryBaseURL, galleryUploadPath)
+	if !strings.HasPrefix(galleryBaseURL, "https://") {
+		log.Println("Warning: GALLERY_BASE_URL is not https:// - the gallery password would be sent in clear text")
+	}
+}
+
+func galleryConfigured() bool {
+	return galleryBaseURL != "" && galleryPassword != ""
+}
+
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// normalizeTags turns a free-form hashtag field into the comma separated list
+// the gallery API expects. Both habits work: "film, golden hour" keeps
+// multi-word tags intact, while "#film #mono" splits on the hashes. Blank and
+// duplicate tags are dropped.
+func normalizeTags(input string) string {
+	var tags []string
+	seen := make(map[string]bool)
+	add := func(tag string) {
+		tag = strings.TrimSpace(tag)
+		key := strings.ToLower(tag)
+		if tag == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		tags = append(tags, tag)
+	}
+	for _, piece := range strings.Split(input, ",") {
+		// A piece holding hashes is a run of hashtags ("#film #mono"); one
+		// without stays whole so multi-word tags survive.
+		if strings.Contains(piece, "#") {
+			for _, sub := range strings.Split(piece, "#") {
+				add(sub)
+			}
+			continue
+		}
+		add(piece)
+	}
+	return strings.Join(tags, ", ")
+}
+
+// galleryContentType maps a filename to the image type the gallery accepts.
+func galleryContentType(filename string) string {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	default:
+		return "image/jpeg"
+	}
+}
+
+// galleryImageBytes returns the bytes to upload for a photo along with the
+// filename to send them under. RAW files travel as their embedded JPEG
+// preview, since the gallery only takes JPEG, PNG and GIF.
+func galleryImageBytes(photoPath, filename string) (string, []byte, error) {
+	if isRawFile(filename) {
+		jpegData, err := extractEmbeddedJPEG(photoPath)
+		if err != nil {
+			return "", nil, err
+		}
+		return strings.TrimSuffix(filename, filepath.Ext(filename)) + ".JPG", jpegData, nil
+	}
+
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".jpg", ".jpeg", ".png", ".gif":
+	default:
+		return "", nil, fmt.Errorf("the gallery only accepts JPEG, PNG and GIF files")
+	}
+	data, err := os.ReadFile(photoPath)
+	if err != nil {
+		return "", nil, err
+	}
+	return filename, data, nil
+}
+
+// buildGalleryUpload assembles the multipart body the gallery expects: the
+// password, the image itself, and whichever of title/tags the user filled in.
+func buildGalleryUpload(filename string, image []byte, title, tags string) (*bytes.Buffer, string, error) {
+	body := &bytes.Buffer{}
+	mw := multipart.NewWriter(body)
+
+	if err := mw.WriteField("password", galleryPassword); err != nil {
+		return nil, "", err
+	}
+	optional := []struct{ name, value string }{
+		{"title", strings.TrimSpace(title)},
+		{"tags", normalizeTags(tags)},
+	}
+	for _, field := range optional {
+		if field.value == "" {
+			continue
+		}
+		if err := mw.WriteField(field.name, field.value); err != nil {
+			return nil, "", err
+		}
+	}
+
+	// CreateFormFile would label the part application/octet-stream; the
+	// gallery is happier being told what the image actually is.
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="photo"; filename="%s"`, quoteEscaper.Replace(filename)))
+	header.Set("Content-Type", galleryContentType(filename))
+	part, err := mw.CreatePart(header)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := part.Write(image); err != nil {
+		return nil, "", err
+	}
+	if err := mw.Close(); err != nil {
+		return nil, "", err
+	}
+	return body, mw.FormDataContentType(), nil
+}
+
+// galleryPhotoURL digs a viewable link out of a successful upload response so
+// the UI can link straight to the photograph. The API documents "its public
+// URLs" without pinning down the field names, so a few likely ones are tried,
+// page-shaped keys first, and anything else is simply left unlinked.
+func galleryPhotoURL(parsed map[string]interface{}) string {
+	sources := []map[string]interface{}{parsed}
+	if urls, ok := parsed["urls"].(map[string]interface{}); ok {
+		sources = append(sources, urls)
+	}
+	for _, source := range sources {
+		for _, key := range []string{"page_url", "page", "permalink", "html_url", "link", "url"} {
+			if value, ok := source[key].(string); ok && value != "" {
+				return absoluteGalleryURL(value)
+			}
+		}
+	}
+	return ""
+}
+
+func absoluteGalleryURL(u string) string {
+	if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+		return u
+	}
+	return galleryBaseURL + "/" + strings.TrimPrefix(u, "/")
+}
+
+// galleryErrorMessage turns a failed upload into something worth showing in a
+// toast: the gallery's own {"error": "..."} when it sent one, otherwise a plain
+// description of the status code.
+func galleryErrorMessage(status int, parsed map[string]interface{}, body []byte) string {
+	if message, ok := parsed["error"].(string); ok && message != "" {
+		return message
+	}
+	switch status {
+	case http.StatusUnauthorized:
+		return "The gallery rejected the password (check GALLERY_PASSWORD)"
+	case http.StatusRequestEntityTooLarge:
+		return "The photo is larger than the gallery's upload limit"
+	case http.StatusTooManyRequests:
+		return "The gallery is rate limiting uploads from this address, try again shortly"
+	}
+	snippet := strings.TrimSpace(string(body))
+	if len(snippet) > 200 {
+		snippet = snippet[:200]
+	}
+	if snippet == "" {
+		return fmt.Sprintf("The gallery returned HTTP %d", status)
+	}
+	return fmt.Sprintf("The gallery returned HTTP %d: %s", status, snippet)
+}
+
+func galleryConfigHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"configured": galleryConfigured(),
+		"base_url":   galleryBaseURL,
+	})
+}
+
+func galleryUploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		writeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if !galleryConfigured() {
+		writeJSONError(w, http.StatusServiceUnavailable, "Gallery uploads are not configured. Set GALLERY_BASE_URL and GALLERY_PASSWORD, then restart the server.")
+		return
+	}
+
+	var data struct {
+		Directory string `json:"directory"`
+		Filename  string `json:"filename"`
+		Title     string `json:"title"`
+		Tags      string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if data.Directory == "" || data.Filename == "" {
+		writeJSONError(w, http.StatusBadRequest, "Missing 'directory' or 'filename' in request")
+		return
+	}
+	if strings.Contains(data.Filename, "..") || strings.ContainsAny(data.Filename, `/\`) {
+		writeJSONError(w, http.StatusBadRequest, "Invalid filename")
+		return
+	}
+	photoPath, err := safePhotoPath(data.Directory, data.Filename)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "Invalid photo path")
+		return
+	}
+
+	uploadName, image, err := galleryImageBytes(photoPath, data.Filename)
+	if err != nil {
+		log.Printf("Gallery upload: cannot read %s: %v", photoPath, err)
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Could not read the photo to upload: %v", err))
+		return
+	}
+
+	body, contentType, err := buildGalleryUpload(uploadName, image, data.Title, data.Tags)
+	if err != nil {
+		log.Printf("Gallery upload: failed to build request body: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "Failed to build the upload request")
+		return
+	}
+
+	req, err := http.NewRequest("POST", galleryBaseURL+galleryUploadPath, body)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "Invalid gallery URL: "+galleryBaseURL)
+		return
+	}
+	req.Header.Set("Content-Type", contentType)
+
+	client := &http.Client{Timeout: galleryUploadTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Gallery upload: request to %s failed: %v", galleryBaseURL+galleryUploadPath, err)
+		writeJSONError(w, http.StatusBadGateway, "Could not reach the gallery at "+galleryBaseURL)
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, galleryResponseLimit))
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, "Could not read the gallery's response")
+		return
+	}
+	parsed := map[string]interface{}{}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		parsed = map[string]interface{}{}
+	}
+
+	// The gallery's own status carries the diagnosis (401 wrong password, 413
+	// too large, 429 rate limited), so it is passed through rather than
+	// flattened into a generic failure.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := galleryErrorMessage(resp.StatusCode, parsed, respBody)
+		log.Printf("Gallery upload of %s rejected with HTTP %d: %s", data.Filename, resp.StatusCode, message)
+		writeJSONError(w, resp.StatusCode, message)
+		return
+	}
+
+	log.Printf("Uploaded %s to gallery %s", data.Filename, galleryBaseURL)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "uploaded",
+		"url":     galleryPhotoURL(parsed),
+		"gallery": parsed,
 	})
 }
 
