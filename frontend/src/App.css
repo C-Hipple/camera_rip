@@ -1301,3 +1301,85 @@
     max-width: 95vw;
   }
 }
+/* --- Edited photos --- */
+.edit-photo-button {
+  background-color: #504945;
+  color: #ebdbb2;
+  font-weight: bold;
+  border-color: #665c54;
+}
+
+.edit-photo-button.edited {
+  background-color: #b16286;
+  /* Gruvbox Purple */
+  color: #1d2021;
+  border-color: #b16286;
+}
+
+.compare-original-button {
+  background-color: #504945;
+  color: #ebdbb2;
+  font-weight: bold;
+  border-color: #665c54;
+}
+
+.compare-original-button.active {
+  background-color: #689d6a;
+  /* Gruvbox Aqua */
+  color: #1d2021;
+  border-color: #689d6a;
+}
+
+/* Marks an edited photo wherever its name is shown. */
+.edited-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background-color: #b16286;
+  /* Gruvbox Purple */
+  color: #1d2021;
+  font-size: 0.7rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+}
+
+/* The film strip and grid only have room for a corner mark. */
+.carousel-thumbnail,
+.thumbnail-grid-item {
+  position: relative;
+}
+
+.thumbnail-edited-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 3px;
+  background-color: #b16286;
+  /* Gruvbox Purple */
+  color: #1d2021;
+  font-size: 0.7rem;
+  font-weight: bold;
+  pointer-events: none;
+}
+
+.carousel-thumbnail.edited:not(.active):not(.selected):not(.saved):not(.deleted) {
+  border-color: #b16286;
+}
+
+.status-original {
+  color: #a89984;
+  /* Gruvbox Gray */
+  font-weight: bold;
+}
+
+.status-edited {
+  color: #b16286;
+  /* Gruvbox Purple */
+  font-weight: bold;
+}

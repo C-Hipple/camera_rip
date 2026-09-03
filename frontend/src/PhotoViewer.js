@@ -5,7 +5,10 @@ const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 5;
 
-function PhotoViewer({ photoName, directory, isSelected, isSaved, isDeleted, children }) {
+// subfolder addresses a photo inside a session subdirectory ("unedited" for
+// the pristine backup of an edited photo); version is a cache-busting token
+// bumped after an edit so the browser reloads the rewritten file.
+function PhotoViewer({ photoName, directory, isSelected, isSaved, isDeleted, subfolder, version, children }) {
     const [zoom, setZoom] = useState(1);
     const [position, setPosition] = useState({ x: 0, y: 0 });
     const [isPanning, setIsPanning] = useState(false);
@@ -191,12 +194,17 @@ function PhotoViewer({ photoName, directory, isSelected, isSaved, isDeleted, chi
         return null;
     }
 
+    const path = subfolder
+        ? `${encodeURIComponent(directory)}/${encodeURIComponent(subfolder)}/${encodeURIComponent(photoName)}`
+        : `${encodeURIComponent(directory)}/${encodeURIComponent(photoName)}`;
+    const src = `${API_URL}/photos/${path}${version ? `?v=${version}` : ''}`;
+
     return (
         <div className="photo-container" ref={containerRef}>
             <div className="photo-wrapper" ref={wrapperRef}>
                 <img
                     ref={imageRef}
-                    src={`${API_URL}/photos/${encodeURIComponent(directory)}/${encodeURIComponent(photoName)}`}
+                    src={src}
                     alt={photoName}
                     className={`photo-display ${isSaved ? 'saved' : (isDeleted ? 'deleted' : (isSelected ? 'selected' : ''))}`}
                     style={{

@@ -8,6 +8,7 @@ A web-based application for importing photos from your camera's SD card, reviewi
 - **Photo Review**: Navigate through imported photos with keyboard shortcuts
 - **Smart Selection**: Mark photos for export with visual feedback
 - **Pin & Compare**: Pin one photo to compare side-by-side with others
+- **Non-Destructive Editing**: Crop and adjust exposure and black level; the untouched original is kept in an `unedited/` folder and can be restored or compared side-by-side at any time
 - **Batch Export**: Copy selected JPEGs to an export folder
 - **Raw File Export**: Copy corresponding raw files (Canon CR3, Olympus ORF) directly from SD card for selected photos
 - **Export Status Tracking**: Track how many raw files have been exported vs. how many are missing
@@ -126,7 +127,27 @@ The frontend is embedded directly into the Go binary using Go's `embed` package.
 5. Click **Save selected photos** when done
 6. Selected JPEGs are copied to `~/Pictures/photos/[timestamp]/selected/`
 
-### 3. Export Raw Files
+### 3. Edit a Photo
+
+1. With a photo on screen, press **`e`** (or click **Edit**) to open the editor
+2. Drag on the preview to draw a crop, drag inside the box to move it, or drag a
+   corner to resize. A single click outside the box clears it back to the full frame
+3. Drag the **Exposure** (±2 EV) and **Black level** (±100) sliders — the preview
+   applies the same maths the saved file will, so what you see is what you get
+4. Click **Apply Edit**
+
+The first edit copies the untouched original to
+`~/Pictures/photos/[timestamp]/unedited/`, and every later edit re-renders from
+that copy, so adjustments never compound — reopening the editor brings back the
+settings you last used. Edited photos are marked with an **EDITED** badge and a
+✎ on their thumbnail; press **`c`** to see the original and the edit side by
+side, and **Revert to Original** in the editor to undo the edit entirely.
+
+JPEG camera settings (shutter speed, aperture, ISO, focal length) survive the
+edit. RAW files cannot be edited — only their embedded preview is readable —
+so the Edit button is disabled for them.
+
+### 4. Export Raw Files
 
 1. After saving selected photos, the **Export Raw Files** button becomes enabled
 2. Keep your SD card connected
@@ -135,7 +156,7 @@ The frontend is embedded directly into the Go binary using Go's `embed` package.
 5. The button shows how many raw files are missing
 6. Export status is displayed below the controls
 
-### 4. Upload to a Gallery
+### 5. Upload to a Gallery
 
 1. Select (or save) a photo, then click **Upload to Gallery**
 2. Give it a title and hashtags — both optional
@@ -154,7 +175,11 @@ PNG and GIF only.
 - **`s`**: Select current photo
 - **`x`**: Unselect current photo
 - **`h`**: Pin/unpin current photo for comparison
-- **`Esc`**: Clear pinned photo
+- **`d`**: Mark/unmark current photo for deletion
+- **`e`**: Edit current photo (crop, exposure, black level)
+- **`c`**: Compare an edited photo against its original
+- **`f`**: Toggle fullscreen
+- **`Esc`**: Exit fullscreen, or clear the pinned/compared photo
 
 ## Directory Structure
 
@@ -164,6 +189,9 @@ PNG and GIF only.
     ├── 100_IMG_0001.JPG          # JPEGs prefixed with source folder number (e.g., 100_)
     ├── 100_IMG_0002.JPG
     ├── 101_IMG_0001.JPG          # Prevents collisions from multiple SD card folders
+    ├── .edits.json               # Crop/exposure/black settings behind each edited photo
+    ├── unedited/                 # Untouched originals of edited photos
+    │   └── 100_IMG_0001.JPG
     └── selected/                 # Selected photos
         ├── 100_IMG_0001.JPG      # Selected JPEGs
         ├── 101_IMG_0001.JPG
