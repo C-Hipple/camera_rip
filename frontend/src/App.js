@@ -93,6 +93,11 @@ const prunePendingSelections = (directories) => {
     } catch (e) { /* best-effort */ }
 };
 
+// Sessions read "2025-12-11 Holiday Party (12 / 200)" in the selector: how many
+// of the folder's photos made it into its selected/ folder, so an old import's
+// yield is visible without opening it.
+const formatDirectoryLabel = (dir) => `${dir.name} (${dir.selected_count} / ${dir.photo_count})`;
+
 function App() {
     const [directories, setDirectories] = useState([]);
     const [currentDirectory, setCurrentDirectory] = useState('');
@@ -179,9 +184,9 @@ function App() {
             .then(data => {
                 if (data && !data.error) {
                     setDirectories(data);
-                    prunePendingSelections(data);
+                    prunePendingSelections(data.map(dir => dir.name));
                     if (data.length > 0 && !currentDirectory) {
-                        switchDirectory(data[0]);
+                        switchDirectory(data[0].name);
                     }
                 }
             })
@@ -496,6 +501,7 @@ function App() {
                     setSavedPhotos(new Set(allFilesToSave));
                     setSelectedPhotos(new Set());
                     fetchExportStatus(); // Update export status after save
+                    fetchDirectories(); // Selector counts moved with the save
                 }
             })
             .catch(err => {
@@ -587,6 +593,7 @@ function App() {
                     .catch(err => toast.error("Error refreshing photos."));
                 // Clear deleted photos set
                 setDeletedPhotos(new Set());
+                fetchDirectories(); // Selector counts shrank with the deletion
             } else {
                 toast.update(toastId, { render: data.error || 'An unknown error occurred.', type: "error", isLoading: false, autoClose: 5000 });
             }
@@ -624,7 +631,7 @@ function App() {
                 movePendingSelections(currentDirectory, data.new_directory);
                 // Swap the name in place so the selector stays consistent, then
                 // re-fetch the list to restore server-side ordering.
-                setDirectories(prev => prev.map(dir => (dir === currentDirectory ? data.new_directory : dir)));
+                setDirectories(prev => prev.map(dir => (dir.name === currentDirectory ? { ...dir, name: data.new_directory } : dir)));
                 switchDirectory(data.new_directory);
                 fetchDirectories();
             } else {
@@ -1162,7 +1169,7 @@ function App() {
                             className="directory-selector"
                         >
                             {directories.map(dir => (
-                                <option key={dir} value={dir}>{dir}</option>
+                                <option key={dir.name} value={dir.name}>{formatDirectoryLabel(dir)}</option>
                             ))}
                         </select>
                     )}

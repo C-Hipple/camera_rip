@@ -381,6 +381,85 @@ func newFakeGallery(t *testing.T, status int, response string, got *galleryUploa
 	}))
 }
 
+// writeTestFile creates dir if needed and drops a one-byte file in it.
+func writeTestFile(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func getDirectories(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/api/directories", nil)
+	w := httptest.NewRecorder()
+	listDirectoriesHandler(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list directories returned %d, want 200: %s", w.Code, w.Body.String())
+	}
+	return w
+}
+
+func TestListDirectoriesHandler(t *testing.T) {
+	photoBaseDir = t.TempDir()
+
+	// A reviewed session: three viewable photos, one of them exported. The raw
+	// beside it lives in selected/raw and must not inflate the selected count.
+	party := filepath.Join(photoBaseDir, "2025-12-11 Holiday Party")
+	writeTestFile(t, party, "100_IMG_0001.JPG")
+	writeTestFile(t, party, "100_IMG_0002.JPG")
+	writeTestFile(t, party, "100_IMG_0003.jpeg")
+	writeTestFile(t, filepath.Join(party, "selected"), "100_IMG_0002.JPG")
+	writeTestFile(t, filepath.Join(party, "selected", "raw"), "100_IMG_0002.CR3")
+
+	// An untouched session has no selected/ folder at all. Its macOS sidecar
+	// and stray text file are not photos.
+	hike := filepath.Join(photoBaseDir, "2025-11-02 Hike")
+	writeTestFile(t, hike, "100_IMG_0009.JPG")
+	writeTestFile(t, hike, "._100_IMG_0009.JPG")
+	writeTestFile(t, hike, "notes.txt")
+
+	// A raw-only import counts its RAWs, the same files the review UI shows.
+	rawOnly := filepath.Join(photoBaseDir, "2025-10-05 Raw Only")
+	writeTestFile(t, rawOnly, "100_IMG_0100.CR3")
+
+	// The thumbnail cache is not a session.
+	writeTestFile(t, filepath.Join(photoBaseDir, ".thumbnails", "2025-11-02 Hike"), "100_IMG_0009.JPG")
+
+	var got []sessionDirectory
+	if err := json.Unmarshal(getDirectories(t).Body.Bytes(), &got); err != nil {
+		t.Fatalf("could not decode reply: %v", err)
+	}
+
+	// Newest first, as the selector lists them.
+	want := []sessionDirectory{
+		{Name: "2025-12-11 Holiday Party", PhotoCount: 3, SelectedCount: 1},
+		{Name: "2025-11-02 Hike", PhotoCount: 1, SelectedCount: 0},
+		{Name: "2025-10-05 Raw Only", PhotoCount: 1, SelectedCount: 0},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d sessions %+v, want %d", len(got), got, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("session %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// The frontend maps over the reply, so an empty photo library must still be a
+// JSON array rather than null.
+func TestListDirectoriesHandlerEmptyLibrary(t *testing.T) {
+	photoBaseDir = t.TempDir()
+
+	if body := strings.TrimSpace(getDirectories(t).Body.String()); body != "[]" {
+		t.Errorf("empty photo library returned %q, want %q", body, "[]")
+	}
+}
+
 // withTestPhoto points photoBaseDir at a temp directory holding one photo.
 func withTestPhoto(t *testing.T, name string, contents []byte) (directory string) {
 	t.Helper()

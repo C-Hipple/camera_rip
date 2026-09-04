@@ -58,6 +58,8 @@ cd frontend && npx react-scripts test --watchAll=false  # Frontend tests
 
 Key routes in `main.go`: `/api/import`, `/api/photos`, `/api/save`, `/api/export-raw`, `/api/export-raw-single`, `/api/delete-imported`, `/api/delete-photos`, `/api/sd-cleanup`, `/api/directories`, `/api/rename-directory`, `/api/selected-photos`, `/api/export-status`, `/api/gallery-config`, `/api/gallery-upload`. Photos served at `/photos/` and thumbnails at `/thumbnail/`.
 
+`/api/directories` returns one object per session — `{name, photo_count, selected_count}` — so the frontend's directory selector can label a session with how much of it survived review (e.g. `2025-12-11 Holiday Party (12 / 200)`). Both counts come from `countPhotoFiles`, which shares `listPhotoFiles` with `/api/photos` and `/api/selected-photos` so the numbers always match the lists those endpoints return.
+
 ## Adding Support for Other Camera Brands
 
 Most brands can be added by appending a `cameraBrand` entry to `supportedBrands` in `backend-go/main.go` (e.g. `{suffix: "MSDCF", rawExt: ".ARW"}` for Sony). For more involved changes:

@@ -20,11 +20,12 @@ const fakeMobileViewport = () => {
   });
 };
 
-const mockApi = ({ photos = [], saved = [], gallery = null, upload = null } = {}) => {
+const mockApi = ({ photos = [], saved = [], gallery = null, upload = null, directories = null } = {}) => {
   const jsonResponse = (data, ok = true) => Promise.resolve({ ok, json: () => Promise.resolve(data) });
+  const sessions = directories || [{ name: 'session-1', photo_count: photos.length, selected_count: saved.length }];
   global.fetch = jest.fn((url) => {
     const path = String(url);
-    if (path.includes('/api/directories')) return jsonResponse(['session-1']);
+    if (path.includes('/api/directories')) return jsonResponse(sessions);
     if (path.includes('/api/photos?')) return jsonResponse(photos);
     if (path.includes('/api/selected-photos')) return jsonResponse(saved);
     if (path.includes('/api/export-status')) return jsonResponse({ selected_count: saved.length, raw_count: 0, missing_count: 0 });
@@ -75,6 +76,21 @@ test('restores unsaved selections and deletion marks from localStorage', async (
   // already-saved.JPG is on disk already, so both are dropped.
   expect(await screen.findByRole('button', { name: /Save 1 new selections/i })).toBeInTheDocument();
   expect(await screen.findByRole('option', { name: /Marked for Deletion \(1\)/i })).toBeInTheDocument();
+});
+
+test('directory selector labels each session with selected / total counts', async () => {
+  mockApi({
+    photos: ['100_IMG_0001.JPG'],
+    directories: [
+      { name: '2025-12-11 Holiday Party', photo_count: 200, selected_count: 12 },
+      { name: '2025-11-02 Hike', photo_count: 40, selected_count: 0 },
+    ],
+  });
+  render(<App />);
+  expect(await screen.findByRole('option', { name: '2025-12-11 Holiday Party (12 / 200)' })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: '2025-11-02 Hike (0 / 40)' })).toBeInTheDocument();
+  // The first session is the one opened, and its photos were requested by name.
+  expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('/api/photos?directory=2025-12-11%20Holiday%20Party'));
 });
 
 test('mobile: double-tap selects the photo and the action bar unselects it', async () => {
