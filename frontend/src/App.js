@@ -6,6 +6,7 @@ import PhotoViewer from './PhotoViewer';
 import ConfirmModal from './ConfirmModal';
 import RenameModal from './RenameModal';
 import GalleryUploadModal from './GalleryUploadModal';
+import EditModal from './EditModal';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
 
@@ -20,6 +21,10 @@ const formatBytes = (bytes) => {
     }
     return `${i === 0 || value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
 };
+
+// Mirrors the backend's editable-format check: RAW files only carry an
+// embedded preview, so there is nothing meaningful to crop or expose.
+const isEditableImage = (filename) => /\.(jpe?g|png)$/i.test(filename || '');
 
 // Matches the backend's default new-import folder name (2006-01-02_15-04-05).
 const formatFolderTimestamp = (d) => {
@@ -43,6 +48,11 @@ const matchesMobile = () =>
     typeof window.matchMedia === 'function' && window.matchMedia(MOBILE_MEDIA_QUERY).matches;
 
 const pendingStorageKey = (directory) => `${PENDING_KEY_PREFIX}${directory}`;
+
+// Editing rewrites a photo under its existing name, so thumbnails carry a
+// version token that changes when the file does.
+const thumbnailUrl = (directory, photoName, version) =>
+    `${API_URL}/thumbnail/${encodeURIComponent(directory)}/${encodeURIComponent(photoName)}${version ? `?v=${version}` : ''}`;
 
 const readPendingSelections = (directory) => {
     try {
@@ -139,6 +149,21 @@ function App() {
     // Holds the filename being uploaded; a non-null value opens the modal.
     const [galleryUploadPhoto, setGalleryUploadPhoto] = useState(null);
     const [isUploadingToGallery, setIsUploadingToGallery] = useState(false);
+    // Adjustments the backend has applied, keyed by filename. Photos listed
+    // here have a pristine copy in the session's unedited/ folder.
+    const [edits, setEdits] = useState({});
+    const [editPhoto, setEditPhoto] = useState(null);
+    const [isSavingEdit, setIsSavingEdit] = useState(false);
+    const [compareOriginal, setCompareOriginal] = useState(false);
+    // Editing rewrites a photo in place, so its URL needs a token the browser
+    // has not cached yet. Keyed by filename, bumped on every edit and revert.
+    const [photoVersions, setPhotoVersions] = useState({});
+
+    // A photo rewritten on disk keeps its URL, so bump a token to defeat the
+    // browser (and thumbnail) cache for that one file.
+    const bumpPhotoVersion = useCallback((filename) => {
+        setPhotoVersions(prev => ({ ...prev, [filename]: Date.now() }));
+    }, []);
 
     useEffect(() => {
         if (typeof window.matchMedia !== 'function') return;
@@ -382,6 +407,12 @@ function App() {
     useEffect(() => {
         if (!currentDirectory) return;
         setPinnedPhoto(null); // Reset pinned photo when directory changes
+        setCompareOriginal(false);
+
+        fetch(`${API_URL}/api/edits?directory=${encodeURIComponent(currentDirectory)}`)
+            .then(res => res.json())
+            .then(data => setEdits(data && !data.error ? data : {}))
+            .catch(() => setEdits({})); // Nothing edited yet is the common case
 
         const photosPromise = fetch(`${API_URL}/api/photos?directory=${encodeURIComponent(currentDirectory)}`)
             .then(res => res.json())
@@ -585,6 +616,12 @@ function App() {
                         }
                     })
                     .catch(err => toast.error("Error refreshing photos."));
+                // Deleted photos take their backed-up originals with them
+                setEdits(prev => {
+                    const next = { ...prev };
+                    filesToDelete.forEach(name => delete next[name]);
+                    return next;
+                });
                 // Clear deleted photos set
                 setDeletedPhotos(new Set());
             } else {
@@ -675,6 +712,80 @@ function App() {
         setIsUploadingToGallery(false);
     };
 
+    // Apply crop/exposure/black adjustments to the photo in the editor. The
+    // backend renders from the pristine original every time, so re-editing
+    // never compounds: whatever the sliders say is what the photo becomes.
+    const handleApplyEdit = async ({ crop, exposure, black }) => {
+        const filename = editPhoto;
+        if (!filename) return;
+        setIsSavingEdit(true);
+        const toastId = toast.loading(`Editing ${filename}...`);
+        try {
+            const response = await fetch(`${API_URL}/api/edit-photo`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ directory: currentDirectory, photo: filename, crop, exposure, black })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (response.ok) {
+                const reverted = data.status === 'reverted';
+                setEdits(prev => {
+                    const next = { ...prev };
+                    if (reverted) {
+                        delete next[filename];
+                    } else {
+                        next[filename] = data.edit || {};
+                    }
+                    return next;
+                });
+                bumpPhotoVersion(filename);
+                if (reverted) setCompareOriginal(false);
+                toast.update(toastId, {
+                    render: reverted ? `Restored ${filename}` : `Edited ${filename}`,
+                    type: "success", isLoading: false, autoClose: 4000
+                });
+                setEditPhoto(null);
+            } else {
+                toast.update(toastId, { render: data.error || 'Failed to edit the photo.', type: "error", isLoading: false, autoClose: 6000 });
+            }
+        } catch (err) {
+            toast.update(toastId, { render: "Failed to edit the photo.", type: "error", isLoading: false, autoClose: 5000 });
+        }
+        setIsSavingEdit(false);
+    };
+
+    // Put the backed-up original back in place and forget the adjustments.
+    const handleRevertEdit = async (photoName) => {
+        const filename = photoName || editPhoto;
+        if (!filename) return;
+        setIsSavingEdit(true);
+        const toastId = toast.loading(`Restoring ${filename}...`);
+        try {
+            const response = await fetch(`${API_URL}/api/revert-photo`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ directory: currentDirectory, photo: filename })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (response.ok) {
+                setEdits(prev => {
+                    const next = { ...prev };
+                    delete next[filename];
+                    return next;
+                });
+                bumpPhotoVersion(filename);
+                setCompareOriginal(false);
+                toast.update(toastId, { render: `Restored ${filename}`, type: "success", isLoading: false, autoClose: 4000 });
+                setEditPhoto(null);
+            } else {
+                toast.update(toastId, { render: data.error || 'Failed to restore the original.', type: "error", isLoading: false, autoClose: 6000 });
+            }
+        } catch (err) {
+            toast.update(toastId, { render: "Failed to restore the original.", type: "error", isLoading: false, autoClose: 5000 });
+        }
+        setIsSavingEdit(false);
+    };
+
     // Filter photos based on carousel filter mode
     const filteredPhotos = React.useMemo(() => {
         if (carouselFilter === 'selected') {
@@ -754,6 +865,8 @@ function App() {
             // Ignore shortcuts while typing in a form field (e.g. the rename input)
             const tag = e.target.tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            // The editor owns the keyboard while it is open (it handles Escape)
+            if (editPhoto) return;
             if (filteredPhotos.length === 0) return;
             const currentPhotoName = filteredPhotos[currentIndex];
 
@@ -765,10 +878,20 @@ function App() {
                 handleDeletion(currentPhotoName, !deletedPhotos.has(currentPhotoName));
             } else if (e.key === 'h') {
                 if (isFullscreen) return; // Pin-to-compare disabled in fullscreen
+                setCompareOriginal(false);
                 if (pinnedPhoto === currentPhotoName) {
                     setPinnedPhoto(null); // Unpin if it's the same photo
                 } else {
                     setPinnedPhoto(currentPhotoName);
+                }
+            } else if (e.key === 'e') {
+                if (isEditableImage(currentPhotoName)) {
+                    setEditPhoto(currentPhotoName);
+                }
+            } else if (e.key === 'c') {
+                if (edits[currentPhotoName]) {
+                    setPinnedPhoto(null);
+                    setCompareOriginal(prev => !prev);
                 }
             } else if (e.key === 'f') {
                 setIsFullscreen(prev => {
@@ -783,6 +906,8 @@ function App() {
             } else if (e.key === 'Escape') {
                 if (isFullscreen) {
                     setIsFullscreen(false);
+                } else if (compareOriginal) {
+                    setCompareOriginal(false);
                 } else {
                     setPinnedPhoto(null);
                 }
@@ -793,7 +918,7 @@ function App() {
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [currentIndex, filteredPhotos, handleSelection, handleDeletion, navigate, pinnedPhoto, deletedPhotos, isFullscreen]);
+    }, [currentIndex, filteredPhotos, handleSelection, handleDeletion, navigate, pinnedPhoto, deletedPhotos, isFullscreen, editPhoto, edits, compareOriginal]);
 
     const currentPhotoName = filteredPhotos.length > 0 && currentIndex < filteredPhotos.length
         ? filteredPhotos[currentIndex]
@@ -801,12 +926,23 @@ function App() {
     const isSelected = currentPhotoName ? selectedPhotos.has(currentPhotoName) : false;
     const isSaved = currentPhotoName ? savedPhotos.has(currentPhotoName) : false;
     const isDeleted = currentPhotoName ? deletedPhotos.has(currentPhotoName) : false;
+    const currentEdit = currentPhotoName ? edits[currentPhotoName] : null;
+    const isEdited = Boolean(currentEdit);
+    const canEditCurrent = Boolean(currentPhotoName) && isEditableImage(currentPhotoName);
     const isPinnedSelected = pinnedPhoto ? selectedPhotos.has(pinnedPhoto) : false;
     const isPinnedSaved = pinnedPhoto ? savedPhotos.has(pinnedPhoto) : false;
     const isPinnedDeleted = pinnedPhoto ? deletedPhotos.has(pinnedPhoto) : false;
     // A photo counts as selected for upload whether the mark is still unsaved
     // or already written to the selected/ folder on disk.
     const canUploadToGallery = Boolean(galleryConfig.configured && currentPhotoName && (isSelected || isSaved));
+
+    // Comparison only makes sense for the photo it was opened on, so moving to
+    // another photo (or reverting this one) drops back to the single view.
+    useEffect(() => {
+        if (compareOriginal && !isEdited) {
+            setCompareOriginal(false);
+        }
+    }, [compareOriginal, isEdited, currentPhotoName]);
 
     // Fetch EXIF camera settings (shutter speed, aperture, ISO, focal length)
     // for the photo on display. The cancelled flag drops stale responses when
@@ -895,10 +1031,14 @@ function App() {
                             isSelected={isSelected}
                             isSaved={isSaved}
                             isDeleted={isDeleted}
+                            version={photoVersions[currentPhotoName]}
                         />
                     </div>
                     <div className="fullscreen-info">
-                        <div className="fullscreen-filename">{currentPhotoName}</div>
+                        <div className="fullscreen-filename">
+                            {currentPhotoName}
+                            {isEdited && <span className="edited-badge">EDITED</span>}
+                        </div>
                         <div className="fullscreen-position">{currentIndex + 1} / {filteredPhotos.length}</div>
                         <div className={`status ${isSaved ? 'status-saved' : (isSelected ? 'status-selected' : (isDeleted ? 'status-deleted' : ''))}`}>
                             {isSaved ? 'SAVED' : (isSelected ? 'SELECTED' : (isDeleted ? 'MARKED FOR DELETION' : 'Not Selected'))}
@@ -927,6 +1067,12 @@ function App() {
                                 {isUploadingToGallery ? 'Uploading...' : 'Upload to Gallery'}
                             </button>
                         )}
+                        <button
+                            onClick={() => setEditPhoto(currentPhotoName)}
+                            disabled={!canEditCurrent || isSavingEdit}
+                            className={`edit-photo-button ${isEdited ? 'edited' : ''}`}>
+                            {isEdited ? 'Edit (e) ✎' : 'Edit (e)'}
+                        </button>
                         <button onClick={() => setIsFullscreen(false)} className="fullscreen-exit">Exit Fullscreen (f / Esc)</button>
                     </div>
                 </div>
@@ -975,6 +1121,17 @@ function App() {
                 photoName={galleryUploadPhoto}
                 galleryUrl={galleryConfig.base_url}
                 isBusy={isUploadingToGallery}
+            />
+            <EditModal
+                isOpen={Boolean(editPhoto)}
+                onClose={() => { if (!isSavingEdit) setEditPhoto(null); }}
+                onApply={handleApplyEdit}
+                onRevert={() => handleRevertEdit(editPhoto)}
+                photoName={editPhoto}
+                directory={currentDirectory}
+                initialEdit={editPhoto ? edits[editPhoto] : null}
+                isEdited={Boolean(editPhoto && edits[editPhoto])}
+                isBusy={isSavingEdit}
             />
 
             <div className={`bottom-left-controls ${isSidebarCollapsed ? 'collapsed' : ''}`}>
@@ -1234,6 +1391,8 @@ function App() {
                                         selectedPhotos={selectedPhotos}
                                         savedPhotos={savedPhotos}
                                         deletedPhotos={deletedPhotos}
+                                        edits={edits}
+                                        photoVersions={photoVersions}
                                     />
                                 ) : (
                                     <div className="empty-filter-message">
@@ -1260,14 +1419,40 @@ function App() {
                                     >
                                         {currentPhotoName && (
                                             <div className="photo-filename-overlay">
-                                                <div className="filename">{currentPhotoName}</div>
+                                                <div className="filename">
+                                                    {currentPhotoName}
+                                                    {isEdited && <span className="edited-badge">EDITED</span>}
+                                                </div>
                                                 <div className="photo-position-overlay">{currentIndex + 1} / {filteredPhotos.length}</div>
                                                 {metadataParts.length > 0 && (
                                                     <div className="photo-metadata-overlay">{metadataParts.join(' · ')}</div>
                                                 )}
                                             </div>
                                         )}
-                                        {pinnedPhoto ? (
+                                        {compareOriginal && isEdited ? (
+                                            <div className="comparison-container">
+                                                <PhotoViewer
+                                                    photoName={currentPhotoName}
+                                                    directory={currentDirectory}
+                                                    subfolder="unedited"
+                                                    version={photoVersions[currentPhotoName]}
+                                                >
+                                                    <p>{currentPhotoName}</p>
+                                                    <p className="status status-original">ORIGINAL</p>
+                                                </PhotoViewer>
+                                                <PhotoViewer
+                                                    photoName={currentPhotoName}
+                                                    directory={currentDirectory}
+                                                    isSelected={isSelected}
+                                                    isSaved={isSaved}
+                                                    isDeleted={isDeleted}
+                                                    version={photoVersions[currentPhotoName]}
+                                                >
+                                                    <p>{currentPhotoName}</p>
+                                                    <p className="status status-edited">EDITED</p>
+                                                </PhotoViewer>
+                                            </div>
+                                        ) : pinnedPhoto ? (
                                             <div className="comparison-container">
                                                 <PhotoViewer
                                                     photoName={pinnedPhoto}
@@ -1275,6 +1460,7 @@ function App() {
                                                     isSelected={isPinnedSelected}
                                                     isSaved={isPinnedSaved}
                                                     isDeleted={isPinnedDeleted}
+                                                    version={photoVersions[pinnedPhoto]}
                                                 >
                                                     <p>{pinnedPhoto}</p>
                                                     <p className={`status ${isPinnedSaved ? 'status-saved' : (isPinnedSelected ? 'status-selected' : (isPinnedDeleted ? 'status-deleted' : ''))}`}>
@@ -1288,6 +1474,7 @@ function App() {
                                                     isSelected={isSelected}
                                                     isSaved={isSaved}
                                                     isDeleted={isDeleted}
+                                                    version={photoVersions[currentPhotoName]}
                                                 />
                                             </div>
                                         ) : (
@@ -1297,6 +1484,7 @@ function App() {
                                                 isSelected={isSelected}
                                                 isSaved={isSaved}
                                                 isDeleted={isDeleted}
+                                                version={photoVersions[currentPhotoName]}
                                             />
                                         )}
                                     </div>
@@ -1337,6 +1525,8 @@ function App() {
                                             selectedPhotos={selectedPhotos}
                                             savedPhotos={savedPhotos}
                                             deletedPhotos={deletedPhotos}
+                                            edits={edits}
+                                            photoVersions={photoVersions}
                                         />
                                     ) : (
                                         <div className="carousel-container">
@@ -1389,6 +1579,23 @@ function App() {
                     >
                         Fullscreen (f)
                     </button>
+                    <button
+                        onClick={() => setEditPhoto(currentPhotoName)}
+                        disabled={!canEditCurrent || isSavingEdit}
+                        className={`edit-photo-button ${isEdited ? 'edited' : ''}`}
+                        title={canEditCurrent ? 'Crop, exposure and black level' : 'RAW files cannot be edited'}
+                    >
+                        {isEdited ? 'Edit (e) ✎' : 'Edit (e)'}
+                    </button>
+                    {isEdited && (
+                        <button
+                            onClick={() => { setPinnedPhoto(null); setCompareOriginal(prev => !prev); }}
+                            disabled={showThumbnailView}
+                            className={`compare-original-button ${compareOriginal ? 'active' : ''}`}
+                        >
+                            {compareOriginal ? 'Hide Original (c)' : 'Compare Original (c)'}
+                        </button>
+                    )}
                     <button onClick={handleSave} disabled={selectedPhotos.size === 0} className="save-button">
                         Save {selectedPhotos.size} new selections
                     </button>
@@ -1416,7 +1623,7 @@ function App() {
                     )}
                 </div>
                 <div className="instructions">
-                    <p>Use 's' to select, 'x' to unselect, 'd' to mark for deletion, 'h' to pin/unpin, and 'f' to toggle fullscreen. Press 'Escape' to exit fullscreen or clear pinned photo.</p>
+                    <p>Use 's' to select, 'x' to unselect, 'd' to mark for deletion, 'h' to pin/unpin, 'e' to edit, 'c' to compare an edit with the original, and 'f' to toggle fullscreen. Press 'Escape' to exit fullscreen or clear the pinned/compared photo.</p>
                     {exportStatus.selected_count > 0 && (
                         <p className="export-status">
                             Export Status: {exportStatus.selected_count} selected JPEGs, {exportStatus.raw_count} raw files exported, {exportStatus.missing_count} missing
@@ -1502,6 +1709,14 @@ function App() {
                             ▦
                         </button>
                         <button
+                            className={`mobile-grid-button ${isEdited ? 'active' : ''}`}
+                            onClick={() => setEditPhoto(currentPhotoName)}
+                            disabled={!canEditCurrent || isSavingEdit}
+                            aria-label="Edit photo"
+                        >
+                            ✎
+                        </button>
+                        <button
                             className="mobile-nav-button"
                             onClick={() => navigate(1)}
                             disabled={filteredPhotos.length === 0}
@@ -1516,7 +1731,7 @@ function App() {
     );
 }
 
-function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, selectedPhotos, savedPhotos, deletedPhotos }) {
+function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, selectedPhotos, savedPhotos, deletedPhotos, edits = {}, photoVersions = {} }) {
     const getCarouselPhotos = () => {
         const numPhotos = photos.length;
         if (numPhotos === 0) return [];
@@ -1544,16 +1759,19 @@ function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, sel
                 const isSelected = selectedPhotos.has(photoName);
                 const isSaved = savedPhotos.has(photoName);
                 const isDeleted = deletedPhotos.has(photoName);
+                const isEdited = Boolean(edits[photoName]);
                 return (
                     <div
                         key={i}
-                        className={`carousel-thumbnail ${photoIndex === currentIndex ? 'active' : ''} ${isSaved ? 'saved' : (isDeleted ? 'deleted' : (isSelected ? 'selected' : ''))}`}
+                        className={`carousel-thumbnail ${photoIndex === currentIndex ? 'active' : ''} ${isSaved ? 'saved' : (isDeleted ? 'deleted' : (isSelected ? 'selected' : ''))} ${isEdited ? 'edited' : ''}`}
                         onClick={() => setCurrentIndex(photoIndex)}
+                        title={isEdited ? `${photoName} (edited)` : photoName}
                     >
                         <img
-                            src={`${API_URL}/thumbnail/${encodeURIComponent(currentDirectory)}/${encodeURIComponent(photoName)}`}
+                            src={thumbnailUrl(currentDirectory, photoName, photoVersions[photoName])}
                             alt={`thumbnail-${photoName}`}
                         />
+                        {isEdited && <span className="thumbnail-edited-badge" title="Edited">✎</span>}
                     </div>
                 );
             })}
@@ -1561,25 +1779,27 @@ function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, sel
     );
 }
 
-function ThumbnailGrid({ photos, currentIndex, setCurrentIndex, currentDirectory, selectedPhotos, savedPhotos, deletedPhotos }) {
+function ThumbnailGrid({ photos, currentIndex, setCurrentIndex, currentDirectory, selectedPhotos, savedPhotos, deletedPhotos, edits = {}, photoVersions = {} }) {
     return (
         <div className="thumbnail-grid">
             {photos.map((photoName, index) => {
                 const isSelected = selectedPhotos.has(photoName);
                 const isSaved = savedPhotos.has(photoName);
                 const isDeleted = deletedPhotos.has(photoName);
+                const isEdited = Boolean(edits[photoName]);
                 return (
                     <div
                         key={photoName}
-                        className={`thumbnail-grid-item ${index === currentIndex ? 'active' : ''} ${isSaved ? 'saved' : (isDeleted ? 'deleted' : (isSelected ? 'selected' : ''))}`}
+                        className={`thumbnail-grid-item ${index === currentIndex ? 'active' : ''} ${isSaved ? 'saved' : (isDeleted ? 'deleted' : (isSelected ? 'selected' : ''))} ${isEdited ? 'edited' : ''}`}
                         onClick={() => setCurrentIndex(index)}
-                        title={photoName}
+                        title={isEdited ? `${photoName} (edited)` : photoName}
                     >
                         <img
-                            src={`${API_URL}/thumbnail/${encodeURIComponent(currentDirectory)}/${encodeURIComponent(photoName)}`}
+                            src={thumbnailUrl(currentDirectory, photoName, photoVersions[photoName])}
                             alt={photoName}
                             loading="lazy"
                         />
+                        {isEdited && <span className="thumbnail-edited-badge" title="Edited">✎</span>}
                         <div className="thumbnail-grid-label">{photoName}</div>
                     </div>
                 );

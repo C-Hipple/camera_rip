@@ -25,7 +25,7 @@ copy-frontend: frontend
 # Build Go backend
 backend: copy-frontend
 	@echo "Building Go backend..."
-	cd backend-go && go build -o camera-rip main.go
+	cd backend-go && go build -o camera-rip .
 
 # Build everything
 build: backend
@@ -53,7 +53,7 @@ clean:
 # Run backend in dev mode (skips frontend build/copy)
 dev-backend:
 	@echo "Starting backend in dev mode..."
-	cd backend-go && env -u GOROOT go run main.go -dev
+	cd backend-go && env -u GOROOT go run . -dev
 
 # Run frontend in dev mode
 dev-frontend:
