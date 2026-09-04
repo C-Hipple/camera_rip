@@ -516,6 +516,15 @@ func corsHandler(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// sessionDirectory is one photo session under photoBaseDir. The counts let the
+// directory selector label a session with how much of it survived review, e.g.
+// "2025-12-11 Holiday Party (12 / 200)", without opening it.
+type sessionDirectory struct {
+	Name          string `json:"name"`
+	PhotoCount    int    `json:"photo_count"`
+	SelectedCount int    `json:"selected_count"`
+}
+
 func listDirectoriesHandler(w http.ResponseWriter, r *http.Request) {
 	files, err := ioutil.ReadDir(photoBaseDir)
 	if err != nil {
@@ -523,14 +532,20 @@ func listDirectoriesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var dirs []string
+	dirs := []sessionDirectory{}
 	for _, file := range files {
-		if file.IsDir() && file.Name() != ".thumbnails" {
-			dirs = append(dirs, file.Name())
+		if !file.IsDir() || file.Name() == ".thumbnails" {
+			continue
 		}
+		sessionDir := filepath.Join(photoBaseDir, file.Name())
+		dirs = append(dirs, sessionDirectory{
+			Name:          file.Name(),
+			PhotoCount:    countPhotoFiles(sessionDir),
+			SelectedCount: countPhotoFiles(filepath.Join(sessionDir, "selected")),
+		})
 	}
 
-	sort.Sort(sort.Reverse(sort.StringSlice(dirs)))
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name > dirs[j].Name })
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(dirs)
@@ -605,6 +620,49 @@ func renameDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// listPhotoFiles returns the reviewable photos in dir, sorted: the viewable
+// images, or the raw files when the folder holds no viewable image. Callers
+// decide what a read error means, so the directory listing can score a session
+// that has no selected/ folder yet as empty while the photo endpoints report it.
+func listPhotoFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	photos := []string{}
+	rawFiles := []string{}
+	for _, entry := range entries {
+		if !entry.IsDir() && !strings.HasPrefix(entry.Name(), "._") {
+			lowerName := strings.ToLower(entry.Name())
+			if strings.HasSuffix(lowerName, ".png") || strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") || strings.HasSuffix(lowerName, ".gif") {
+				photos = append(photos, entry.Name())
+			} else if isRawFile(entry.Name()) {
+				rawFiles = append(rawFiles, entry.Name())
+			}
+		}
+	}
+
+	// If the folder contains only RAW files (no viewable images), expose the RAWs directly.
+	if len(photos) == 0 {
+		photos = rawFiles
+	}
+
+	sort.Strings(photos)
+	return photos, nil
+}
+
+// countPhotoFiles counts what listPhotoFiles would return, reading an
+// unreadable directory as empty: a session nobody has exported from has no
+// selected/ folder at all.
+func countPhotoFiles(dir string) int {
+	photos, err := listPhotoFiles(dir)
+	if err != nil {
+		return 0
+	}
+	return len(photos)
+}
+
 func getPhotosHandler(w http.ResponseWriter, r *http.Request) {
 	directory := r.URL.Query().Get("directory")
 	if directory == "" {
@@ -617,31 +675,11 @@ func getPhotosHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid directory", http.StatusBadRequest)
 		return
 	}
-	files, err := ioutil.ReadDir(targetDir)
+	photos, err := listPhotoFiles(targetDir)
 	if err != nil {
 		http.Error(w, "Failed to read photo directory", http.StatusInternalServerError)
 		return
 	}
-
-	var photos []string
-	var rawFiles []string
-	for _, file := range files {
-		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
-			lowerName := strings.ToLower(file.Name())
-			if strings.HasSuffix(lowerName, ".png") || strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") || strings.HasSuffix(lowerName, ".gif") {
-				photos = append(photos, file.Name())
-			} else if isRawFile(file.Name()) {
-				rawFiles = append(rawFiles, file.Name())
-			}
-		}
-	}
-
-	// If the folder contains only RAW files (no viewable images), expose the RAWs directly.
-	if len(photos) == 0 {
-		photos = rawFiles
-	}
-
-	sort.Strings(photos)
 
 	// Start async thumbnail generation for this directory
 	if len(photos) > 0 {
@@ -667,7 +705,7 @@ func getSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid directory", http.StatusBadRequest)
 		return
 	}
-	files, err := ioutil.ReadDir(selectedDir)
+	photos, err := listPhotoFiles(selectedDir)
 	if err != nil {
 		// If the directory doesn't exist, it just means no photos have been selected yet.
 		// Return an empty list.
@@ -679,25 +717,6 @@ func getSelectedPhotosHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read selected photo directory", http.StatusInternalServerError)
 		return
 	}
-
-	var photos []string
-	var rawFiles []string
-	for _, file := range files {
-		if !file.IsDir() && !strings.HasPrefix(file.Name(), "._") {
-			lowerName := strings.ToLower(file.Name())
-			if strings.HasSuffix(lowerName, ".png") || strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") || strings.HasSuffix(lowerName, ".gif") {
-				photos = append(photos, file.Name())
-			} else if isRawFile(file.Name()) {
-				rawFiles = append(rawFiles, file.Name())
-			}
-		}
-	}
-
-	if len(photos) == 0 {
-		photos = rawFiles
-	}
-
-	sort.Strings(photos)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(photos)

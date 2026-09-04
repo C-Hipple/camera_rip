@@ -232,13 +232,16 @@
 }
 
 .directory-selector {
-  padding: 8px 12px;
-  font-size: 1rem;
+  padding: 8px;
+  /* Slightly tighter than the buttons around it so a session name plus its
+     "(selected / total)" counts fit the 300px sidebar without clipping. */
+  font-size: 0.85rem;
   border-radius: 5px;
   background-color: #3c3836;
   color: #ebdbb2;
   border: 1px solid #a89984;
   width: 100%;
+  text-overflow: ellipsis;
 }
 
 .import-button {
