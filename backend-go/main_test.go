@@ -421,6 +421,10 @@ func TestListDirectoriesHandler(t *testing.T) {
 	writeTestFile(t, hike, "100_IMG_0009.JPG")
 	writeTestFile(t, hike, "._100_IMG_0009.JPG")
 	writeTestFile(t, hike, "notes.txt")
+	// An edited photo stays one photo: its pristine backup lives in unedited/
+	// and its settings sidecar is not an image.
+	writeTestFile(t, filepath.Join(hike, uneditedDirName), "100_IMG_0009.JPG")
+	writeTestFile(t, hike, editsFileName)
 
 	// A raw-only import counts its RAWs, the same files the review UI shows.
 	rawOnly := filepath.Join(photoBaseDir, "2025-10-05 Raw Only")

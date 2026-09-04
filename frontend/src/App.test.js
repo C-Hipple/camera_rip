@@ -20,7 +20,7 @@ const fakeMobileViewport = () => {
   });
 };
 
-const mockApi = ({ photos = [], saved = [], gallery = null, upload = null, directories = null } = {}) => {
+const mockApi = ({ photos = [], saved = [], gallery = null, upload = null, edits = {}, editResult = null, directories = null } = {}) => {
   const jsonResponse = (data, ok = true) => Promise.resolve({ ok, json: () => Promise.resolve(data) });
   const sessions = directories || [{ name: 'session-1', photo_count: photos.length, selected_count: saved.length }];
   global.fetch = jest.fn((url) => {
@@ -31,6 +31,9 @@ const mockApi = ({ photos = [], saved = [], gallery = null, upload = null, direc
     if (path.includes('/api/export-status')) return jsonResponse({ selected_count: saved.length, raw_count: 0, missing_count: 0 });
     if (path.includes('/api/gallery-config')) return jsonResponse(gallery || { configured: false, base_url: '' });
     if (path.includes('/api/gallery-upload')) return jsonResponse(upload || { status: 'uploaded', url: '' });
+    if (path.includes('/api/edit-photo')) return jsonResponse(editResult || { status: 'edited', edit: { exposure: 0, black: 0 } });
+    if (path.includes('/api/revert-photo')) return jsonResponse({ status: 'reverted' });
+    if (path.includes('/api/edits')) return jsonResponse(edits);
     return jsonResponse({});
   });
 };
@@ -170,4 +173,81 @@ test('gallery upload button stays hidden when the backend has no gallery configu
   fireEvent.keyDown(window, { key: 's' });
   await screen.findByRole('button', { name: /Save 1 new selections/i });
   expect(screen.queryByRole('button', { name: /Upload to Gallery/i })).not.toBeInTheDocument();
+});
+
+test('the editor posts the slider values and flags the photo as edited', async () => {
+  mockApi({
+    photos: ['100_IMG_0001.JPG', '100_IMG_0002.JPG'],
+    editResult: { status: 'edited', edit: { exposure: 0.5, black: 20 } },
+  });
+  const { container } = render(<App />);
+  await screen.findByRole('option', { name: /All Images \(2\)/i });
+
+  // Nothing is edited yet, so there is nothing to compare against
+  expect(screen.queryByRole('button', { name: /Compare Original/i })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /^Edit \(e\)$/i }));
+  fireEvent.change(await screen.findByLabelText(/Exposure/i), { target: { value: '0.5' } });
+  fireEvent.change(screen.getByLabelText(/Black level/i), { target: { value: '20' } });
+  fireEvent.click(screen.getByRole('button', { name: /Apply Edit/i }));
+
+  await waitFor(() => expect(postedTo('/api/edit-photo')).toEqual({
+    directory: 'session-1',
+    photo: '100_IMG_0001.JPG',
+    crop: null,
+    exposure: 0.5,
+    black: 20,
+  }));
+
+  // A successful edit closes the modal and marks the photo everywhere it appears
+  await waitFor(() => expect(screen.queryByLabelText(/Black level/i)).not.toBeInTheDocument());
+  expect(await screen.findByText('EDITED')).toBeInTheDocument();
+  expect(container.querySelectorAll('.carousel-thumbnail.edited').length).toBeGreaterThan(0);
+});
+
+test('an edited photo can be compared against its backed-up original', async () => {
+  mockApi({
+    photos: ['100_IMG_0001.JPG', '100_IMG_0002.JPG'],
+    edits: { '100_IMG_0001.JPG': { exposure: 1, black: 0 } },
+  });
+  const { container } = render(<App />);
+  await screen.findByRole('option', { name: /All Images \(2\)/i });
+
+  fireEvent.click(await screen.findByRole('button', { name: /Compare Original/i }));
+
+  await waitFor(() => expect(container.querySelector('.comparison-container')).toBeInTheDocument());
+  // The left-hand pane reads the pristine copy out of unedited/
+  expect(container.querySelector('img[src*="/unedited/"]')).toBeInTheDocument();
+  expect(screen.getByText('ORIGINAL')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /Hide Original/i }));
+  await waitFor(() => expect(container.querySelector('.comparison-container')).toBeNull());
+});
+
+test('reverting an edit restores the original and drops the edited marks', async () => {
+  mockApi({
+    photos: ['100_IMG_0001.JPG'],
+    edits: { '100_IMG_0001.JPG': { exposure: 1, black: 0 } },
+  });
+  const { container } = render(<App />);
+  await screen.findByRole('option', { name: /All Images \(1\)/i });
+  await screen.findByText('EDITED');
+
+  fireEvent.click(screen.getByRole('button', { name: /^Edit \(e\) ✎$/i }));
+  fireEvent.click(await screen.findByRole('button', { name: /Revert to Original/i }));
+
+  await waitFor(() => expect(postedTo('/api/revert-photo')).toEqual({
+    directory: 'session-1',
+    photo: '100_IMG_0001.JPG',
+  }));
+  await waitFor(() => expect(screen.queryByText('EDITED')).not.toBeInTheDocument());
+  expect(container.querySelectorAll('.carousel-thumbnail.edited')).toHaveLength(0);
+  expect(screen.queryByRole('button', { name: /Compare Original/i })).not.toBeInTheDocument();
+});
+
+test('RAW files cannot be edited', async () => {
+  mockApi({ photos: ['100_IMG_0001.CR3'] });
+  render(<App />);
+  await screen.findByRole('option', { name: /All Images \(1\)/i });
+  expect(screen.getByRole('button', { name: /^Edit \(e\)$/i })).toBeDisabled();
 });

@@ -194,6 +194,9 @@ type photoMetadata struct {
 	Aperture     string `json:"aperture,omitempty"`
 	ISO          string `json:"iso,omitempty"`
 	FocalLength  string `json:"focal_length,omitempty"`
+	// Orientation is the raw EXIF tag (1-8). The editor needs it to rotate
+	// pixels the way a browser would; the UI never displays it.
+	Orientation int `json:"-"`
 }
 
 // trimFloat formats v with at most one decimal place, dropping a trailing ".0"
@@ -269,6 +272,8 @@ func parseExifTIFF(data []byte) (photoMetadata, error) {
 				if num, den, ok := readRational(e); ok && den > 0 {
 					meta.Aperture = "f/" + trimFloat(float64(num)/float64(den))
 				}
+			case 0x0112: // Orientation (SHORT, stored inline)
+				meta.Orientation = int(bo.Uint16(data[e+8:]))
 			case 0x8827: // ISO speed (SHORT, stored inline)
 				meta.ISO = fmt.Sprintf("ISO %d", bo.Uint16(data[e+8:]))
 			case 0x920A: // FocalLength
@@ -471,6 +476,9 @@ func main() {
 	http.HandleFunc("/api/delete-photos", corsHandler(deletePhotosHandler))
 	http.HandleFunc("/api/rename-directory", corsHandler(renameDirectoryHandler))
 	http.HandleFunc("/api/photo-metadata", corsHandler(photoMetadataHandler))
+	http.HandleFunc("/api/edits", corsHandler(editsHandler))
+	http.HandleFunc("/api/edit-photo", corsHandler(editPhotoHandler))
+	http.HandleFunc("/api/revert-photo", corsHandler(revertPhotoHandler))
 	http.HandleFunc("/api/gallery-config", corsHandler(galleryConfigHandler))
 	http.HandleFunc("/api/gallery-upload", corsHandler(galleryUploadHandler))
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
@@ -2161,6 +2169,10 @@ func deletePhotosHandler(w http.ResponseWriter, r *http.Request) {
 			if err := os.Remove(thumbnailPath); err != nil && !os.IsNotExist(err) {
 				log.Printf("Failed to delete thumbnail %s: %v", thumbnailPath, err)
 			}
+
+			// A deleted photo leaves nothing to revert to, so its backup in
+			// unedited/ and its edit record go with it.
+			removeEditArtifacts(data.Directory, filename)
 		}
 	}
 
@@ -2394,14 +2406,19 @@ func photoMetadataHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func servePhotoHandler(w http.ResponseWriter, r *http.Request) {
+	// Paths are {directory}/{filename}, optionally with a subfolder in
+	// between — "unedited" for the pristine backup of an edited photo.
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/photos/"), "/")
 	if len(parts) < 2 {
 		http.Error(w, "Invalid photo path", http.StatusBadRequest)
 		return
 	}
-	directory := parts[0]
-	filename := parts[1]
-	photoPath, err := safePhotoPath(directory, filename)
+	filename := parts[len(parts)-1]
+	if filename == "" {
+		http.Error(w, "Invalid photo path", http.StatusBadRequest)
+		return
+	}
+	photoPath, err := safePhotoPath(parts...)
 	if err != nil {
 		http.Error(w, "Invalid photo path", http.StatusBadRequest)
 		return

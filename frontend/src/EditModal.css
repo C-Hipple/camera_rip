@@ -1,0 +1,188 @@
+/* The editor needs more room than the confirm dialogs it shares a shell with. */
+.edit-modal {
+    max-width: 720px;
+    width: min(96vw, 720px);
+    max-height: 92vh;
+    overflow-y: auto;
+    padding: 20px 24px;
+}
+
+.edit-modal-title {
+    color: #d79921;
+    /* Gruvbox Yellow */
+    font-size: 1.2rem;
+    word-break: break-all;
+    margin-bottom: 12px;
+}
+
+.edit-preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #282828;
+    /* Gruvbox Dark */
+    border: 1px solid #504945;
+    border-radius: 6px;
+    min-height: 220px;
+    padding: 10px;
+}
+
+.edit-canvas-frame {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+    overflow: hidden;
+    touch-action: none;
+    cursor: crosshair;
+    max-width: 100%;
+}
+
+.edit-canvas {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+/* The oversized shadow dims everything outside the crop; the frame clips it. */
+.edit-crop-box {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px solid #d79921;
+    /* Gruvbox Yellow */
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+    cursor: move;
+}
+
+/* With no crop set the outline is only an affordance: drags on the photo must
+   reach the frame underneath and start a new crop, while the corner handles
+   stay grabbable for pulling the edges in. */
+.edit-crop-box.full-frame {
+    pointer-events: none;
+    border-style: dashed;
+}
+
+.edit-crop-handle {
+    pointer-events: auto;
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    background-color: #d79921;
+    border: 1px solid #282828;
+    border-radius: 2px;
+}
+
+.edit-crop-handle.nw {
+    top: -7px;
+    left: -7px;
+    cursor: nwse-resize;
+}
+
+.edit-crop-handle.ne {
+    top: -7px;
+    right: -7px;
+    cursor: nesw-resize;
+}
+
+.edit-crop-handle.sw {
+    bottom: -7px;
+    left: -7px;
+    cursor: nesw-resize;
+}
+
+.edit-crop-handle.se {
+    bottom: -7px;
+    right: -7px;
+    cursor: nwse-resize;
+}
+
+.edit-preview-message {
+    color: #a89984;
+    /* Gruvbox Gray */
+    font-size: 0.9rem;
+    line-height: 1.4;
+    margin: 0;
+    padding: 90px 10px;
+    text-align: center;
+}
+
+.edit-controls {
+    margin-top: 16px;
+}
+
+.edit-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.edit-slider-row label {
+    color: #ebdbb2;
+    /* Gruvbox Light */
+    font-size: 0.9rem;
+    width: 110px;
+    flex-shrink: 0;
+}
+
+.edit-slider-row input[type="range"] {
+    flex: 1 1 auto;
+    accent-color: #d79921;
+    min-width: 0;
+}
+
+.edit-slider-value {
+    color: #bdae93;
+    font-family: monospace;
+    font-size: 0.85rem;
+    width: 80px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.edit-crop-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.edit-crop-summary {
+    color: #bdae93;
+    font-family: monospace;
+    font-size: 0.85rem;
+}
+
+.edit-reset-button {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    font-weight: normal;
+}
+
+.edit-hint {
+    margin: 12px 0 0 0;
+}
+
+.edit-modal-buttons {
+    margin-top: 18px;
+    flex-wrap: wrap;
+}
+
+.edit-revert-button {
+    margin-right: auto;
+}
+
+@media (max-width: 768px) {
+    .edit-modal {
+        padding: 16px;
+    }
+
+    .edit-slider-row label {
+        width: 90px;
+        font-size: 0.85rem;
+    }
+
+    .edit-preview-message {
+        padding: 60px 10px;
+    }
+}
