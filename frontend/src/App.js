@@ -130,6 +130,7 @@ function App() {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [sdCleanup, setSdCleanup] = useState(null);
+    const [sdSpace, setSdSpace] = useState(null);
     const [showSDCleanupModal, setShowSDCleanupModal] = useState(false);
     const [isCleaningSD, setIsCleaningSD] = useState(false);
     const [showDeletePhotosModal, setShowDeletePhotosModal] = useState(false);
@@ -285,10 +286,20 @@ function App() {
             .catch(() => setSdCleanup(null));
     }, []);
 
+    // How full the connected SD card is. Null whenever there is no card in the
+    // reader or its filesystem could not be measured, which hides the meter.
+    const fetchSDSpace = useCallback(() => {
+        fetch(`${API_URL}/api/sd-space`)
+            .then(res => res.json())
+            .then(data => setSdSpace(data && data.usb_connected && !data.error ? data : null))
+            .catch(() => setSdSpace(null));
+    }, []);
+
     useEffect(() => {
         fetchImportPreview();
         fetchSDCleanup();
-    }, [fetchImportPreview, fetchSDCleanup]);
+        fetchSDSpace();
+    }, [fetchImportPreview, fetchSDCleanup, fetchSDSpace]);
 
     const handleSDCleanup = async () => {
         setIsCleaningSD(true);
@@ -308,6 +319,7 @@ function App() {
             toast.update(toastId, { render: "Failed to clean up SD card.", type: "error", isLoading: false, autoClose: 5000 });
         }
         fetchSDCleanup();
+        fetchSDSpace();
         setIsCleaningSD(false);
     };
 
@@ -586,6 +598,8 @@ function App() {
         } catch (err) {
             toast.update(toastId, { render: "Failed to delete imported images.", type: "error", isLoading: false, autoClose: 5000 });
         }
+        // The card just lost the imported files, so the meter is stale.
+        fetchSDSpace();
         setIsDeleting(false);
     };
 
@@ -813,6 +827,11 @@ function App() {
             deleted: deletedCount
         };
     }, [photos, selectedPhotos, savedPhotos, deletedPhotos]);
+
+    // Share of the SD card in use, for the sidebar capacity meter.
+    const sdUsedPercent = sdSpace && sdSpace.total_bytes > 0
+        ? Math.min(100, Math.round((sdSpace.used_bytes / sdSpace.total_bytes) * 100))
+        : 0;
 
     // Track current photo name
     useEffect(() => {
@@ -1338,6 +1357,24 @@ function App() {
                         >
                             Rename Folder
                         </button>
+                    )}
+                    {sdSpace && (
+                        <div className="sd-space">
+                            <div className="sd-space-header">
+                                <span className="sd-space-title">SD card{sdSpace.name ? ` · ${sdSpace.name}` : ''}</span>
+                                <span className="sd-space-percent">{sdUsedPercent}% full</span>
+                            </div>
+                            <div className="sd-space-track">
+                                <div
+                                    className={`sd-space-fill ${sdUsedPercent >= 90 ? 'critical' : sdUsedPercent >= 75 ? 'warning' : ''}`}
+                                    style={{ width: `${sdUsedPercent}%` }}
+                                />
+                            </div>
+                            <div className="preview-stat">
+                                <span className="preview-label">Free space:</span>
+                                <span className="preview-value">{`${formatBytes(sdSpace.free_bytes)} of ${formatBytes(sdSpace.total_bytes)}`}</span>
+                            </div>
+                        </div>
                     )}
                     <button
                         onClick={() => setShowDeleteModal(true)}

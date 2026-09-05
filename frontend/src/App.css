@@ -340,6 +340,70 @@
   cursor: not-allowed;
 }
 
+/* SD card capacity meter, above the delete button */
+.sd-space {
+  background-color: #3c3836;
+  border: 1px solid #504945;
+  border-radius: 6px;
+  padding: 12px 16px;
+}
+
+.sd-space-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sd-space-title {
+  color: #ebdbb2;
+  font-weight: 600;
+  font-size: 0.9rem;
+  /* A long volume label must not push the percentage off the sidebar */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sd-space-percent {
+  color: #a89984;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.sd-space-track {
+  width: 100%;
+  height: 8px;
+  background-color: #282828;
+  border: 1px solid #504945;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.sd-space-fill {
+  height: 100%;
+  background-color: #b8bb26;
+  /* Gruvbox Green */
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}
+
+.sd-space-fill.warning {
+  background-color: #fabd2f;
+  /* Gruvbox Yellow */
+}
+
+.sd-space-fill.critical {
+  background-color: #fb4934;
+  /* Gruvbox Red */
+}
+
+.sd-space .preview-stat {
+  padding-top: 8px;
+  padding-bottom: 0;
+}
+
 .sd-cleanup {
   background-color: #3c3836;
   border: 1px solid #d79921;

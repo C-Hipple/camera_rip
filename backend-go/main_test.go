@@ -205,6 +205,30 @@ func TestExtractPhotoMetadataFromJPEG(t *testing.T) {
 	}
 }
 
+func TestReadSDCardSpace(t *testing.T) {
+	mount := t.TempDir()
+
+	space, err := readSDCardSpace(mount)
+	if err != nil {
+		t.Fatalf("readSDCardSpace() error = %v", err)
+	}
+	if !space.USBConnected {
+		t.Error("readSDCardSpace() reported the card as disconnected")
+	}
+	if space.MountPoint != mount || space.Name != filepath.Base(mount) {
+		t.Errorf("readSDCardSpace() identified the card as %q at %q, want %q at %q", space.Name, space.MountPoint, filepath.Base(mount), mount)
+	}
+	if space.TotalBytes == 0 {
+		t.Fatal("readSDCardSpace() reported a zero-byte filesystem")
+	}
+	if space.FreeBytes > space.TotalBytes {
+		t.Errorf("readSDCardSpace() reported %d free bytes of %d total", space.FreeBytes, space.TotalBytes)
+	}
+	if want := space.TotalBytes - space.FreeBytes; space.UsedBytes != want {
+		t.Errorf("readSDCardSpace() used = %d, want %d (total minus free)", space.UsedBytes, want)
+	}
+}
+
 func TestSDCleanupTarget(t *testing.T) {
 	tests := []struct {
 		name     string

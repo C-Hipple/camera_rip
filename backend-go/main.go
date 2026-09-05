@@ -473,6 +473,7 @@ func main() {
 	http.HandleFunc("/api/selected-photos", corsHandler(getSelectedPhotosHandler))
 	http.HandleFunc("/api/delete-imported", corsHandler(deleteImportedHandler))
 	http.HandleFunc("/api/sd-cleanup", corsHandler(sdCleanupHandler))
+	http.HandleFunc("/api/sd-space", corsHandler(sdSpaceHandler))
 	http.HandleFunc("/api/delete-photos", corsHandler(deletePhotosHandler))
 	http.HandleFunc("/api/rename-directory", corsHandler(renameDirectoryHandler))
 	http.HandleFunc("/api/photo-metadata", corsHandler(photoMetadataHandler))
@@ -1991,6 +1992,68 @@ func deleteImportedHandler(w http.ResponseWriter, r *http.Request) {
 		"errors":      errorCount,
 		"total_found": deletedCount + deletedRawCount + notFoundCount + errorCount,
 	})
+}
+
+// sdCardSpace reports how full the connected SD card is. FreeBytes counts the
+// space an unprivileged writer can still fill, so UsedBytes plus FreeBytes can
+// fall a little short of TotalBytes on a filesystem that reserves blocks.
+type sdCardSpace struct {
+	USBConnected bool   `json:"usb_connected"`
+	Name         string `json:"name,omitempty"`
+	MountPoint   string `json:"mount_point,omitempty"`
+	TotalBytes   uint64 `json:"total_bytes"`
+	FreeBytes    uint64 `json:"free_bytes"`
+	UsedBytes    uint64 `json:"used_bytes"`
+	Error        string `json:"error,omitempty"`
+}
+
+// readSDCardSpace measures the filesystem the card is mounted on. The name is
+// the volume label the OS mounted it under (e.g. "EOS_DIGITAL"), which is how
+// the user recognises which card is in the reader.
+func readSDCardSpace(mountPoint string) (sdCardSpace, error) {
+	total, free, err := diskUsage(mountPoint)
+	if err != nil {
+		return sdCardSpace{}, err
+	}
+	var used uint64
+	if total > free {
+		used = total - free
+	}
+	return sdCardSpace{
+		USBConnected: true,
+		Name:         filepath.Base(mountPoint),
+		MountPoint:   mountPoint,
+		TotalBytes:   total,
+		FreeBytes:    free,
+		UsedBytes:    used,
+	}, nil
+}
+
+// sdSpaceHandler reports the capacity of the connected SD card so the sidebar
+// can show how much room is left before an import, and what deleting the
+// imported files would win back.
+func sdSpaceHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	usbMountPoint := findUSBMountPoint()
+	if usbMountPoint == "" {
+		json.NewEncoder(w).Encode(sdCardSpace{})
+		return
+	}
+
+	space, err := readSDCardSpace(usbMountPoint)
+	if err != nil {
+		// The card is mounted, we just cannot measure it; report the failure
+		// so the frontend hides the meter instead of drawing an empty card.
+		log.Printf("Failed to read free space on %s: %v", usbMountPoint, err)
+		json.NewEncoder(w).Encode(sdCardSpace{USBConnected: true, Error: "Could not read free space from the SD card"})
+		return
+	}
+	json.NewEncoder(w).Encode(space)
 }
 
 // sdCleanupItem describes one junk directory found at the root of the SD card.
