@@ -102,6 +102,22 @@
     margin: 0 0 15px 0;
 }
 
+/* A <select> wearing .modal-input: the native control paints itself light on a
+   dark dialog otherwise, and its own arrow sits in the default chrome. */
+select.modal-input {
+    appearance: none;
+    -webkit-appearance: none;
+    color-scheme: dark;
+    cursor: pointer;
+    padding-right: 32px;
+    background-image:
+        linear-gradient(45deg, transparent 50%, #a89984 50%),
+        linear-gradient(135deg, #a89984 50%, transparent 50%);
+    background-position: calc(100% - 17px) calc(50% - 2px), calc(100% - 12px) calc(50% - 2px);
+    background-size: 6px 6px, 6px 6px;
+    background-repeat: no-repeat;
+}
+
 .modal-input:disabled {
     opacity: 0.6;
     cursor: not-allowed;
