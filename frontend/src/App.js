@@ -151,6 +151,8 @@ function App() {
     const [newFolderName, setNewFolderName] = useState(() => formatFolderTimestamp(new Date()));
     const [folderNameEdited, setFolderNameEdited] = useState(false);
     const [galleryConfig, setGalleryConfig] = useState({ configured: false, base_url: '' });
+    // The albums the gallery has, for the upload modal's dropdown.
+    const [galleryAlbums, setGalleryAlbums] = useState([]);
     // Holds the filename being uploaded; a non-null value opens the modal.
     const [galleryUploadPhoto, setGalleryUploadPhoto] = useState(null);
     const [isUploadingToGallery, setIsUploadingToGallery] = useState(false);
@@ -246,6 +248,20 @@ function App() {
             .then(data => setGalleryConfig(data && data.configured ? data : disabled))
             .catch(() => setGalleryConfig(disabled));
     }, []);
+
+    // The albums the upload modal offers, read from the gallery through the
+    // backend. Asked for again each time the modal opens, so an album created
+    // in the gallery mid-session is not invisible here; a gallery that cannot
+    // be reached simply leaves the dropdown out rather than blocking an
+    // upload that works perfectly well without an album.
+    const isGalleryModalOpen = Boolean(galleryUploadPhoto);
+    useEffect(() => {
+        if (!galleryConfig.configured) return;
+        fetch(`${API_URL}/api/gallery-albums`)
+            .then(res => res.json())
+            .then(data => setGalleryAlbums(Array.isArray(data && data.albums) ? data.albums : []))
+            .catch(() => setGalleryAlbums([]));
+    }, [galleryConfig.configured, isGalleryModalOpen]);
 
     const fetchImportPreview = useCallback(async () => {
         setIsLoadingPreview(true);
@@ -685,7 +701,7 @@ function App() {
     // password and does the actual upload, so only the photo's identity and
     // the title/tags typed into the modal are sent from here. The modal stays
     // open on failure so a rejected upload can be retried without retyping.
-    const handleGalleryUpload = async ({ title, tags }) => {
+    const handleGalleryUpload = async ({ title, tags, album }) => {
         const filename = galleryUploadPhoto;
         if (!filename) return;
         setIsUploadingToGallery(true);
@@ -700,7 +716,8 @@ function App() {
                     directory: currentDirectory,
                     filename,
                     title,
-                    tags
+                    tags,
+                    album
                 })
             });
             const data = await response.json().catch(() => ({}));
@@ -1127,6 +1144,7 @@ function App() {
                 onConfirm={handleGalleryUpload}
                 photoName={galleryUploadPhoto}
                 galleryUrl={galleryConfig.base_url}
+                albums={galleryAlbums}
                 isBusy={isUploadingToGallery}
             />
             <EditModal

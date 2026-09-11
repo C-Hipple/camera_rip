@@ -20,7 +20,7 @@ const fakeMobileViewport = () => {
   });
 };
 
-const mockApi = ({ photos = [], saved = [], gallery = null, upload = null, edits = {}, editResult = null, directories = null } = {}) => {
+const mockApi = ({ photos = [], saved = [], gallery = null, albums = [], upload = null, edits = {}, editResult = null, directories = null } = {}) => {
   const jsonResponse = (data, ok = true) => Promise.resolve({ ok, json: () => Promise.resolve(data) });
   const sessions = directories || [{ name: 'session-1', photo_count: photos.length, selected_count: saved.length }];
   global.fetch = jest.fn((url) => {
@@ -30,6 +30,7 @@ const mockApi = ({ photos = [], saved = [], gallery = null, upload = null, edits
     if (path.includes('/api/selected-photos')) return jsonResponse(saved);
     if (path.includes('/api/export-status')) return jsonResponse({ selected_count: saved.length, raw_count: 0, missing_count: 0 });
     if (path.includes('/api/gallery-config')) return jsonResponse(gallery || { configured: false, base_url: '' });
+    if (path.includes('/api/gallery-albums')) return jsonResponse({ albums });
     if (path.includes('/api/gallery-upload')) return jsonResponse(upload || { status: 'uploaded', url: '' });
     if (path.includes('/api/edit-photo')) return jsonResponse(editResult || { status: 'edited', edit: { exposure: 0, black: 0 } });
     if (path.includes('/api/revert-photo')) return jsonResponse({ status: 'reverted' });
@@ -154,6 +155,8 @@ test('gallery upload button is hidden until a photo is selected, and posts title
 
   fireEvent.change(await screen.findByLabelText(/Title/i), { target: { value: 'Sunrise' } });
   fireEvent.change(screen.getByLabelText(/Hashtags/i), { target: { value: '#film #mono' } });
+  // This gallery has no albums, so the modal offers no dropdown to pick one in
+  expect(screen.queryByLabelText(/Album/i)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /^Upload$/i }));
 
   await waitFor(() => expect(postedTo('/api/gallery-upload')).toEqual({
@@ -161,9 +164,52 @@ test('gallery upload button is hidden until a photo is selected, and posts title
     filename: '100_IMG_0001.JPG',
     title: 'Sunrise',
     tags: '#film #mono',
+    album: '',
   }));
   // A successful upload closes the modal
   await waitFor(() => expect(screen.queryByLabelText(/Hashtags/i)).not.toBeInTheDocument());
+});
+
+test("the upload modal offers the gallery's albums and posts the one picked", async () => {
+  mockApi({
+    photos: ['100_IMG_0001.JPG'],
+    gallery: { configured: true, base_url: 'https://gallery.example' },
+    albums: [
+      { id: '9f2c1ab4', slug: 'iceland-2024', title: 'Iceland, 2024', count: 18 },
+      { id: '0e79868e', slug: 'estuary', title: 'Estuary', count: 0 },
+    ],
+  });
+  render(<App />);
+  await screen.findByRole('option', { name: /All Images \(1\)/i });
+
+  fireEvent.keyDown(window, { key: 's' });
+  fireEvent.click(await screen.findByRole('button', { name: /Upload to Gallery/i }));
+
+  const albums = await screen.findByLabelText(/Album/i);
+  expect(screen.getByRole('option', { name: 'Iceland, 2024 (18)' })).toBeInTheDocument();
+  // An album nobody has filed anything into yet is offered without a count
+  expect(screen.getByRole('option', { name: 'Estuary' })).toBeInTheDocument();
+  // Filing a photo into no album at all stays the default
+  expect(albums.value).toBe('');
+
+  fireEvent.change(albums, { target: { value: '9f2c1ab4' } });
+  fireEvent.click(screen.getByRole('button', { name: /^Upload$/i }));
+
+  // The album travels as its id, which is what the gallery files it under
+  await waitFor(() => expect(postedTo('/api/gallery-upload')).toEqual({
+    directory: 'session-1',
+    filename: '100_IMG_0001.JPG',
+    title: '',
+    tags: '',
+    album: '9f2c1ab4',
+  }));
+
+  // A shoot usually lands in one album, so the choice survives to the next
+  // upload even though the title and hashtags start empty again.
+  await waitFor(() => expect(screen.queryByLabelText(/Hashtags/i)).not.toBeInTheDocument());
+  fireEvent.click(await screen.findByRole('button', { name: /Upload to Gallery/i }));
+  expect((await screen.findByLabelText(/Album/i)).value).toBe('9f2c1ab4');
+  expect(screen.getByLabelText(/Title/i).value).toBe('');
 });
 
 test('gallery upload button stays hidden when the backend has no gallery configured', async () => {

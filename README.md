@@ -12,7 +12,7 @@ A web-based application for importing photos from your camera's SD card, reviewi
 - **Batch Export**: Copy selected JPEGs to an export folder
 - **Raw File Export**: Copy corresponding raw files (Canon CR3, Olympus ORF) directly from SD card for selected photos
 - **Export Status Tracking**: Track how many raw files have been exported vs. how many are missing
-- **Upload to a Gallery**: Post a selected photo straight to a photo gallery with a title and hashtags
+- **Upload to a Gallery**: Post a selected photo straight to a photo gallery with a title, hashtags and an album
 
 ## Screenshot
 
@@ -74,7 +74,7 @@ starting the server:
 
 | Variable | Example | What it is |
 | --- | --- | --- |
-| `GALLERY_BASE_URL` | `https://gallery.example.com` | The gallery's root URL. Uploads go to `<base>/api/upload`. |
+| `GALLERY_BASE_URL` | `https://gallery.example.com` | The gallery's root URL. Uploads go to `<base>/api/upload`, and the album list is read from `<base>/api/albums`. |
 | `GALLERY_PASSWORD` | `hunter2` | The same password you sign in to the gallery with. |
 
 ```bash
@@ -162,11 +162,18 @@ so the Edit button is disabled for them.
 2. Give it a title and hashtags — both optional
    - `#film #goldenhour` splits on the hashes
    - `film, golden hour` splits on the commas, so multi-word tags survive
-3. Click **Upload**; a link to the published photograph appears in the toast
+3. Pick an **Album** if the gallery has any. The choice stays put for the next
+   upload, so a whole shoot only needs choosing once
+4. Click **Upload**; a link to the published photograph appears in the toast
 
 The photo is posted to `<GALLERY_BASE_URL>/api/upload` as `multipart/form-data`.
 RAW files are uploaded as their embedded JPEG preview, since galleries take JPEG,
 PNG and GIF only.
+
+The album dropdown is filled from `<GALLERY_BASE_URL>/api/albums`, read fresh
+each time the modal opens so an album created in the gallery mid-session is not
+invisible here. A gallery with no albums — or one that cannot be reached — simply
+leaves the dropdown out; the upload works the same without one.
 
 ## Keyboard Shortcuts
 
