@@ -20,7 +20,7 @@ const fakeMobileViewport = () => {
   });
 };
 
-const mockApi = ({ photos = [], saved = [], gallery = null, albums = [], upload = null, edits = {}, editResult = null, directories = null } = {}) => {
+const mockApi = ({ photos = [], saved = [], gallery = null, albums = [], upload = null, edits = {}, editResult = null, directories = null, sdSpace = null } = {}) => {
   const jsonResponse = (data, ok = true) => Promise.resolve({ ok, json: () => Promise.resolve(data) });
   const sessions = directories || [{ name: 'session-1', photo_count: photos.length, selected_count: saved.length }];
   global.fetch = jest.fn((url) => {
@@ -29,6 +29,7 @@ const mockApi = ({ photos = [], saved = [], gallery = null, albums = [], upload 
     if (path.includes('/api/photos?')) return jsonResponse(photos);
     if (path.includes('/api/selected-photos')) return jsonResponse(saved);
     if (path.includes('/api/export-status')) return jsonResponse({ selected_count: saved.length, raw_count: 0, missing_count: 0 });
+    if (path.includes('/api/sd-space')) return jsonResponse(sdSpace || { usb_connected: false });
     if (path.includes('/api/gallery-config')) return jsonResponse(gallery || { configured: false, base_url: '' });
     if (path.includes('/api/gallery-albums')) return jsonResponse({ albums });
     if (path.includes('/api/gallery-upload')) return jsonResponse(upload || { status: 'uploaded', url: '' });
@@ -95,6 +96,33 @@ test('restores unsaved selections and deletion marks from localStorage', async (
   // already-saved.JPG is on disk already, so both are dropped.
   expect(await screen.findByRole('button', { name: /Save 1 Selection/i })).toBeInTheDocument();
   expect(await screen.findByRole('option', { name: /Marked for Deletion \(1\)/i })).toBeInTheDocument();
+});
+
+test('sidebar shows how full a connected SD card is', async () => {
+  const gb = 1024 ** 3;
+  mockApi({
+    sdSpace: {
+      usb_connected: true,
+      name: 'EOS_DIGITAL',
+      mount_point: '/Volumes/EOS_DIGITAL',
+      total_bytes: 64 * gb,
+      free_bytes: 16 * gb,
+      used_bytes: 48 * gb,
+    },
+  });
+  render(<App />);
+  expect(await screen.findByText('SD card · EOS_DIGITAL')).toBeInTheDocument();
+  expect(screen.getByText('75% full')).toBeInTheDocument();
+  expect(screen.getByText('16 GB of 64 GB')).toBeInTheDocument();
+});
+
+test('the SD card meter stays hidden when no card is connected', async () => {
+  mockApi({ photos: ['100_IMG_0001.JPG'] });
+  render(<App />);
+  // Wait for the sidebar to settle before asserting the meter is absent.
+  expect(await screen.findByRole('button', { name: /Delete Already Imported from SD Card/i })).toBeInTheDocument();
+  expect(screen.queryByText(/full$/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Free space:/)).not.toBeInTheDocument();
 });
 
 test('directory selector labels each session with selected / total counts', async () => {
