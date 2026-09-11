@@ -1052,35 +1052,60 @@ function App() {
                         </div>
                     </div>
                     <div className="fullscreen-controls">
-                        <button onClick={() => navigate(-1)}>← (j)</button>
-                        <button
-                            onClick={() => handleSelection(currentPhotoName, !isSelected)}
-                            disabled={isSaved || isDeleted}
-                            className={`select-toggle-button ${isSaved ? 'saved' : (isSelected ? 'selected' : '')}`}>
-                            {isSaved ? 'SAVED' : (isSelected ? 'Unselect (x)' : 'Select (s)')}
-                        </button>
-                        <button
-                            onClick={() => handleDeletion(currentPhotoName, !isDeleted)}
-                            disabled={isSaved}
-                            className={`delete-toggle-button ${isDeleted ? 'deleted' : ''}`}>
-                            {isDeleted ? 'Unmark Delete (d)' : 'Mark Delete (d)'}
-                        </button>
-                        <button onClick={() => navigate(1)}>→ (k)</button>
-                        {canUploadToGallery && (
-                            <button
-                                onClick={() => setGalleryUploadPhoto(currentPhotoName)}
-                                disabled={isUploadingToGallery}
-                                className="upload-gallery-button">
-                                {isUploadingToGallery ? 'Uploading...' : 'Upload to Gallery'}
+                        <div className="control-group" role="group" aria-label="Navigate">
+                            <button onClick={() => navigate(-1)} title="Previous photo (← or j)">
+                                Previous<kbd aria-hidden="true">←</kbd>
                             </button>
-                        )}
-                        <button
-                            onClick={() => setEditPhoto(currentPhotoName)}
-                            disabled={!canEditCurrent || isSavingEdit}
-                            className={`edit-photo-button ${isEdited ? 'edited' : ''}`}>
-                            {isEdited ? 'Edit (e) ✎' : 'Edit (e)'}
-                        </button>
-                        <button onClick={() => setIsFullscreen(false)} className="fullscreen-exit">Exit Fullscreen (f / Esc)</button>
+                            <button onClick={() => navigate(1)} title="Next photo (→ or k)">
+                                Next<kbd aria-hidden="true">→</kbd>
+                            </button>
+                        </div>
+                        <div className="control-group" role="group" aria-label="Review this photo">
+                            <button
+                                onClick={() => handleSelection(currentPhotoName, !isSelected)}
+                                disabled={isSaved || isDeleted}
+                                className={`select-toggle-button ${isSaved ? 'saved' : (isSelected ? 'selected' : '')}`}
+                                title={isSaved ? 'Already saved to this session’s selected folder' : (isSelected ? 'Unselect this photo (x)' : 'Select this photo (s)')}>
+                                {isSaved ? 'SAVED' : (isSelected
+                                    ? <>Unselect<kbd aria-hidden="true">x</kbd></>
+                                    : <>Select<kbd aria-hidden="true">s</kbd></>)}
+                            </button>
+                            <button
+                                onClick={() => handleDeletion(currentPhotoName, !isDeleted)}
+                                disabled={isSaved}
+                                className={`delete-toggle-button ${isDeleted ? 'deleted' : ''}`}
+                                title={isDeleted ? 'Keep this photo after all (d)' : 'Mark this photo for deletion (d)'}>
+                                {isDeleted
+                                    ? <>Unmark Delete<kbd aria-hidden="true">d</kbd></>
+                                    : <>Mark Delete<kbd aria-hidden="true">d</kbd></>}
+                            </button>
+                        </div>
+                        <div className="control-group" role="group" aria-label="Photo tools">
+                            <button
+                                onClick={() => setEditPhoto(currentPhotoName)}
+                                disabled={!canEditCurrent || isSavingEdit}
+                                className={`edit-photo-button ${isEdited ? 'edited' : ''}`}
+                                title={canEditCurrent ? 'Crop, exposure and black level (e)' : 'RAW files cannot be edited'}>
+                                Edit<kbd aria-hidden="true">e</kbd>{isEdited && <span className="button-mark">✎</span>}
+                            </button>
+                            {canUploadToGallery && (
+                                <button
+                                    onClick={() => setGalleryUploadPhoto(currentPhotoName)}
+                                    disabled={isUploadingToGallery}
+                                    className="upload-gallery-button"
+                                    title="Post this photo to the configured gallery">
+                                    {isUploadingToGallery ? 'Uploading…' : 'Upload to Gallery'}
+                                </button>
+                            )}
+                        </div>
+                        <div className="control-group">
+                            <button
+                                onClick={() => setIsFullscreen(false)}
+                                className="fullscreen-exit"
+                                title="Leave fullscreen (f or Esc)">
+                                Exit Fullscreen<kbd aria-hidden="true">Esc</kbd>
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -1557,80 +1582,128 @@ function App() {
                     </div>
                 )}
 
+                {/* Grouped by what each button acts on: the photo row is the
+                    review loop, the session row holds the batch actions, so a
+                    destructive one never lands next to Next. */}
                 <div className="controls">
-                    <button onClick={() => navigate(-1)} disabled={filteredPhotos.length === 0 || photos.length === 0}>Previous (← or j)</button>
-                    <button
-                        onClick={() => handleSelection(currentPhotoName, !isSelected)}
-                        disabled={filteredPhotos.length === 0 || photos.length === 0 || isSaved || isDeleted || !currentPhotoName}
-                        className={`select-toggle-button ${isSaved ? 'saved' : (isSelected ? 'selected' : '')}`}>
-                        {isSaved ? 'SAVED' : (isSelected ? 'Unselect (x)' : 'Select (s)')}
-                    </button>
-                    <button
-                        onClick={() => handleDeletion(currentPhotoName, !isDeleted)}
-                        disabled={filteredPhotos.length === 0 || photos.length === 0 || isSaved || !currentPhotoName}
-                        className={`delete-toggle-button ${isDeleted ? 'deleted' : ''}`}>
-                        {isDeleted ? 'Unmark Delete (d)' : 'Mark Delete (d)'}
-                    </button>
-                    <button onClick={() => navigate(1)} disabled={filteredPhotos.length === 0 || photos.length === 0}>Next (→ or k)</button>
-                    <button
-                        onClick={() => setShowThumbnailView(!showThumbnailView)}
-                        disabled={photos.length === 0}
-                        className={`thumbnail-view-button ${showThumbnailView ? 'active' : ''}`}
-                    >
-                        {showThumbnailView ? 'Carousel View' : 'Thumbnail View'}
-                    </button>
-                    <button
-                        onClick={() => { setPinnedPhoto(null); setIsFullscreen(true); }}
-                        disabled={!currentPhotoName || showThumbnailView}
-                        className="fullscreen-button"
-                    >
-                        Fullscreen (f)
-                    </button>
-                    <button
-                        onClick={() => setEditPhoto(currentPhotoName)}
-                        disabled={!canEditCurrent || isSavingEdit}
-                        className={`edit-photo-button ${isEdited ? 'edited' : ''}`}
-                        title={canEditCurrent ? 'Crop, exposure and black level' : 'RAW files cannot be edited'}
-                    >
-                        {isEdited ? 'Edit (e) ✎' : 'Edit (e)'}
-                    </button>
-                    {isEdited && (
+                    <div className="control-row control-row-photo">
+                        <div className="control-group" role="group" aria-label="Navigate">
+                            <button
+                                onClick={() => navigate(-1)}
+                                disabled={filteredPhotos.length === 0 || photos.length === 0}
+                                title="Previous photo (← or j)">
+                                Previous<kbd aria-hidden="true">←</kbd>
+                            </button>
+                            <button
+                                onClick={() => navigate(1)}
+                                disabled={filteredPhotos.length === 0 || photos.length === 0}
+                                title="Next photo (→ or k)">
+                                Next<kbd aria-hidden="true">→</kbd>
+                            </button>
+                        </div>
+                        <div className="control-group" role="group" aria-label="Review this photo">
+                            <button
+                                onClick={() => handleSelection(currentPhotoName, !isSelected)}
+                                disabled={filteredPhotos.length === 0 || photos.length === 0 || isSaved || isDeleted || !currentPhotoName}
+                                className={`select-toggle-button ${isSaved ? 'saved' : (isSelected ? 'selected' : '')}`}
+                                title={isSaved ? 'Already saved to this session’s selected folder' : (isSelected ? 'Unselect this photo (x)' : 'Select this photo (s)')}>
+                                {isSaved ? 'SAVED' : (isSelected
+                                    ? <>Unselect<kbd aria-hidden="true">x</kbd></>
+                                    : <>Select<kbd aria-hidden="true">s</kbd></>)}
+                            </button>
+                            <button
+                                onClick={() => handleDeletion(currentPhotoName, !isDeleted)}
+                                disabled={filteredPhotos.length === 0 || photos.length === 0 || isSaved || !currentPhotoName}
+                                className={`delete-toggle-button ${isDeleted ? 'deleted' : ''}`}
+                                title={isDeleted ? 'Keep this photo after all (d)' : 'Mark this photo for deletion (d)'}>
+                                {isDeleted
+                                    ? <>Unmark Delete<kbd aria-hidden="true">d</kbd></>
+                                    : <>Mark Delete<kbd aria-hidden="true">d</kbd></>}
+                            </button>
+                        </div>
+                        <div className="control-group" role="group" aria-label="Photo tools">
+                            <button
+                                onClick={() => setEditPhoto(currentPhotoName)}
+                                disabled={!canEditCurrent || isSavingEdit}
+                                className={`edit-photo-button ${isEdited ? 'edited' : ''}`}
+                                title={canEditCurrent ? 'Crop, exposure and black level (e)' : 'RAW files cannot be edited'}
+                            >
+                                Edit<kbd aria-hidden="true">e</kbd>{isEdited && <span className="button-mark">✎</span>}
+                            </button>
+                            {isEdited && (
+                                <button
+                                    onClick={() => { setPinnedPhoto(null); setCompareOriginal(prev => !prev); }}
+                                    disabled={showThumbnailView}
+                                    className={`compare-original-button ${compareOriginal ? 'active' : ''}`}
+                                    title={compareOriginal ? 'Hide the untouched original (c)' : 'Show the untouched original beside the edit (c)'}
+                                >
+                                    {compareOriginal
+                                        ? <>Hide Original<kbd aria-hidden="true">c</kbd></>
+                                        : <>Compare Original<kbd aria-hidden="true">c</kbd></>}
+                                </button>
+                            )}
+                            {canUploadToGallery && (
+                                <button
+                                    onClick={() => setGalleryUploadPhoto(currentPhotoName)}
+                                    disabled={isUploadingToGallery}
+                                    className="upload-gallery-button"
+                                    title="Post this photo to the configured gallery">
+                                    {isUploadingToGallery ? 'Uploading…' : 'Upload to Gallery'}
+                                </button>
+                            )}
+                        </div>
+                        <div className="control-group" role="group" aria-label="View">
+                            <button
+                                onClick={() => setShowThumbnailView(!showThumbnailView)}
+                                disabled={photos.length === 0}
+                                className={`thumbnail-view-button ${showThumbnailView ? 'active' : ''}`}
+                                title={showThumbnailView ? 'Back to the single-photo carousel' : 'Show every photo in this session as a grid'}
+                            >
+                                {showThumbnailView ? 'Carousel View' : 'Thumbnail View'}
+                            </button>
+                            <button
+                                onClick={() => { setPinnedPhoto(null); setIsFullscreen(true); }}
+                                disabled={!currentPhotoName || showThumbnailView}
+                                className="fullscreen-button"
+                                title="Fill the screen with this photo (f)"
+                            >
+                                Fullscreen<kbd aria-hidden="true">f</kbd>
+                            </button>
+                        </div>
+                    </div>
+                    <div className="control-row control-row-session" role="group" aria-label="Session actions">
+                        <span className="control-row-label">This session</span>
                         <button
-                            onClick={() => { setPinnedPhoto(null); setCompareOriginal(prev => !prev); }}
-                            disabled={showThumbnailView}
-                            className={`compare-original-button ${compareOriginal ? 'active' : ''}`}
-                        >
-                            {compareOriginal ? 'Hide Original (c)' : 'Compare Original (c)'}
+                            onClick={handleSave}
+                            disabled={selectedPhotos.size === 0}
+                            className="save-button"
+                            title="Copy the selected photos into this session’s selected folder">
+                            Save {selectedPhotos.size} Selection{selectedPhotos.size === 1 ? '' : 's'}
                         </button>
-                    )}
-                    <button onClick={handleSave} disabled={selectedPhotos.size === 0} className="save-button">
-                        Save {selectedPhotos.size} new selections
-                    </button>
-                    <button
-                        onClick={handleExportRaw}
-                        disabled={exportStatus.selected_count === 0 || isExportingRaw}
-                        className="export-raw-button">
-                        {isExportingRaw ? 'Exporting...' : `Export Raw Files (${exportStatus.missing_count} missing)`}
-                    </button>
-                    {canUploadToGallery && (
                         <button
-                            onClick={() => setGalleryUploadPhoto(currentPhotoName)}
-                            disabled={isUploadingToGallery}
-                            className="upload-gallery-button">
-                            {isUploadingToGallery ? 'Uploading...' : 'Upload to Gallery'}
+                            onClick={handleExportRaw}
+                            disabled={exportStatus.selected_count === 0 || isExportingRaw}
+                            className="export-raw-button"
+                            title="Copy the raw file for each selected photo off the card">
+                            {isExportingRaw ? 'Exporting…' : `Export RAW${exportStatus.missing_count > 0 ? ` (${exportStatus.missing_count} missing)` : ''}`}
                         </button>
-                    )}
-                    {carouselFilter === 'deleted' && deletedPhotos.size > 0 && (
-                        <button
-                            onClick={() => setShowDeletePhotosModal(true)}
-                            disabled={isDeletingPhotos}
-                            className="delete-photos-button">
-                            {isDeletingPhotos ? 'Deleting...' : `Delete ${deletedPhotos.size} Photo(s) from Hard Drive`}
-                        </button>
-                    )}
+                        {carouselFilter === 'deleted' && deletedPhotos.size > 0 && (
+                            <button
+                                onClick={() => setShowDeletePhotosModal(true)}
+                                disabled={isDeletingPhotos}
+                                className="delete-photos-button"
+                                title="Permanently delete the marked photos from your hard drive">
+                                {isDeletingPhotos ? 'Deleting…' : `Delete ${deletedPhotos.size} from Disk`}
+                            </button>
+                        )}
+                    </div>
                 </div>
                 <div className="instructions">
-                    <p>Use 's' to select, 'x' to unselect, 'd' to mark for deletion, 'h' to pin/unpin, 'e' to edit, 'c' to compare an edit with the original, and 'f' to toggle fullscreen. Press 'Escape' to exit fullscreen or clear the pinned/compared photo.</p>
+                    <p>
+                        Every shortcut is printed on its button. Also: <kbd>h</kbd> pins a photo to
+                        compare side by side, and <kbd>Esc</kbd> leaves fullscreen or clears the
+                        pinned and compared photos.
+                    </p>
                     {exportStatus.selected_count > 0 && (
                         <p className="export-status">
                             Export Status: {exportStatus.selected_count} selected JPEGs, {exportStatus.raw_count} raw files exported, {exportStatus.missing_count} missing

@@ -120,12 +120,17 @@ The frontend is embedded directly into the Go binary using Go's `embed` package.
 3. Select photos you want to keep:
    - Press **`s`** to select the current photo
    - Press **`x`** to unselect
-4. Use the **pin feature** to compare photos:
+4. The control bar under the film strip is split in two: the top row acts on
+   the photo on screen (navigate, select, mark for deletion, edit, compare,
+   upload, change view) and the row below the divider acts on the whole
+   session (save, export raw, delete from disk). Every shortcut is printed on
+   the button that uses it
+5. Use the **pin feature** to compare photos:
    - Press **`h`** to pin the current photo
    - Navigate to other photos to compare side-by-side
    - Press **`h`** again or **`Esc`** to unpin
-5. Click **Save selected photos** when done
-6. Selected JPEGs are copied to `~/Pictures/photos/[timestamp]/selected/`
+6. Click **Save N Selections** on the session row when done
+7. Selected JPEGs are copied to `~/Pictures/photos/[timestamp]/selected/`
 
 ### 3. Edit a Photo
 
@@ -149,11 +154,11 @@ so the Edit button is disabled for them.
 
 ### 4. Export Raw Files
 
-1. After saving selected photos, the **Export Raw Files** button becomes enabled
+1. After saving selected photos, the **Export RAW** button becomes enabled
 2. Keep your SD card connected
-3. Click **Export Raw Files** to copy raw files (CR3 or ORF) from the SD card
+3. Click **Export RAW** to copy raw files (CR3 or ORF) from the SD card
 4. Raw files are copied to `~/Pictures/photos/[timestamp]/selected/raw/`
-5. The button shows how many raw files are missing
+5. The button shows how many raw files are still missing
 6. Export status is displayed below the controls
 
 ### 5. Upload to a Gallery
