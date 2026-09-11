@@ -575,25 +575,113 @@
 }
 
 /* --- Controls --- */
+/* The action bar under the photo. It can hold a dozen buttons once a photo is
+   edited, selectable, uploadable and marked for deletion, so it is split into
+   two rows - per-photo review on top, whole-session batch actions below - and
+   the review row into trays by what the buttons do. Nothing destructive ever
+   ends up shoulder to shoulder with Next. */
 .controls {
-  margin-top: 12px;
+  margin-top: 14px;
+  width: 100%;
+  max-width: 1400px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.control-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 14px;
+}
+
+.control-row-session {
+  padding-top: 10px;
+  border-top: 1px solid #3c3836;
+}
+
+.control-row-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7c6f64;
+  /* Gruvbox Dark Gray */
+  margin-right: 2px;
+}
+
+.control-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-row-photo .control-group,
+.fullscreen-controls .control-group {
+  padding: 5px;
+  border-radius: 9px;
+  background-color: rgba(0, 0, 0, 0.22);
 }
 
 .controls button {
-  padding: 8px 16px;
-  font-size: 1rem;
-  margin: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
   border-radius: 5px;
-  border: 1px solid #a89984;
-  /* Gruvbox Gray */
-  background-color: transparent;
+  border: 1px solid #504945;
+  background-color: #3c3836;
+  /* Gruvbox Dark Gray */
   color: #ebdbb2;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.controls button:hover:not(:disabled) {
+  background-color: #504945;
+  border-color: #7c6f64;
 }
 
 .controls button:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.45;
+}
+
+.controls button:focus-visible,
+.fullscreen-controls button:focus-visible {
+  outline: 2px solid #d79921;
+  /* Gruvbox Yellow */
+  outline-offset: 2px;
+}
+
+/* Keyboard hints ride along on the button that performs the action, which is
+   why the instructions below only mention the shortcuts with no button. */
+.controls kbd,
+.fullscreen-controls kbd,
+.instructions kbd {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.72rem;
+  font-style: normal;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(235, 219, 178, 0.25);
+  background-color: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* The ✎ on an edited photo's Edit button */
+.button-mark {
+  font-size: 0.9rem;
+  line-height: 1;
 }
 
 .select-toggle-button.selected {
@@ -604,9 +692,11 @@
   font-weight: bold;
 }
 
-.delete-toggle-button {
-  background-color: transparent;
-  color: #ebdbb2;
+.controls .select-toggle-button.selected:hover:not(:disabled),
+.fullscreen-controls .select-toggle-button.selected:hover:not(:disabled) {
+  background-color: #b8bb26;
+  /* Gruvbox Bright Green */
+  border-color: #b8bb26;
 }
 
 .delete-toggle-button.deleted {
@@ -617,43 +707,88 @@
   font-weight: bold;
 }
 
-.save-button {
+.controls .delete-toggle-button.deleted:hover:not(:disabled),
+.fullscreen-controls .delete-toggle-button.deleted:hover:not(:disabled) {
+  background-color: #cc241d;
+  /* Gruvbox Dark Red */
+  border-color: #cc241d;
+  color: #fbf1c7;
+}
+
+/* Save is the primary action of the session row. These single-class variants
+   are scoped to the bar because `.controls button` would otherwise outrank
+   them and flatten every button to the same neutral chip. */
+.controls .save-button {
   background-color: #458588;
   /* Gruvbox Blue */
-  color: #ebdbb2;
+  color: #fbf1c7;
+  border-color: #458588;
   font-weight: bold;
 }
 
-.export-raw-button {
+.controls .save-button:hover:not(:disabled) {
+  background-color: #83a598;
+  /* Gruvbox Bright Blue */
+  border-color: #83a598;
+  color: #282828;
+}
+
+.controls .export-raw-button {
   background-color: #d65d0e;
   /* Gruvbox Orange */
-  color: #ebdbb2;
+  color: #fbf1c7;
+  border-color: #d65d0e;
   font-weight: bold;
 }
 
-.export-raw-button:disabled {
-  background-color: #7c6f64;
-  /* Gruvbox Dark Gray */
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.delete-photos-button {
-  background-color: #fb4934;
-  /* Gruvbox Red */
+.controls .export-raw-button:hover:not(:disabled) {
+  background-color: #fe8019;
+  /* Gruvbox Bright Orange */
+  border-color: #fe8019;
   color: #282828;
+}
+
+.controls .export-raw-button:disabled {
+  background-color: #3c3836;
+  border-color: #504945;
+  color: #ebdbb2;
+  cursor: not-allowed;
+}
+
+/* Outlined at rest so it reads as dangerous without shouting; it only fills
+   red under the cursor, right before the confirmation modal. */
+.controls .delete-photos-button {
+  background-color: transparent;
+  color: #fb4934;
+  /* Gruvbox Red */
+  border-color: #fb4934;
   font-weight: bold;
 }
 
-.delete-photos-button:disabled {
-  background-color: #7c6f64;
-  /* Gruvbox Dark Gray */
+.controls .delete-photos-button:hover:not(:disabled) {
+  background-color: #fb4934;
+  border-color: #fb4934;
+  color: #282828;
+}
+
+.controls .delete-photos-button:disabled {
+  background-color: transparent;
   cursor: not-allowed;
-  opacity: 0.5;
+}
+
+/* Below ~1100px the hints are the first thing to go: the label and the
+   tooltip both still say which key it is. */
+@media (max-width: 1100px) {
+
+  .controls kbd,
+  .fullscreen-controls kbd {
+    display: none;
+  }
 }
 
 .instructions {
-  margin-top: 8px;
+  margin-top: 10px;
+  max-width: 900px;
   font-size: 0.85rem;
   font-style: italic;
   color: #a89984;
@@ -854,6 +989,19 @@
   /* Gruvbox Green */
 }
 
+.controls .upload-gallery-button,
+.fullscreen-controls .upload-gallery-button {
+  border-color: #7c6f64;
+  color: #fabd2f;
+  /* Gruvbox Bright Yellow */
+}
+
+.controls .upload-gallery-button:hover:not(:disabled),
+.fullscreen-controls .upload-gallery-button:hover:not(:disabled) {
+  background-color: #504945;
+  border-color: #fabd2f;
+}
+
 .select-toggle-button.saved {
   background-color: #98971a;
   /* Gruvbox Green */
@@ -954,24 +1102,19 @@
   font-family: 'Courier New', Courier, monospace;
 }
 
-.thumbnail-view-button {
-  background-color: #504945;
-  color: #ebdbb2;
-  font-weight: bold;
-  border-color: #665c54;
-}
-
 .thumbnail-view-button.active {
   background-color: #689d6a;
+  /* Gruvbox Aqua */
   color: #1d2021;
   border-color: #689d6a;
+  font-weight: bold;
 }
 
-.fullscreen-button {
-  background-color: #504945;
-  color: #ebdbb2;
-  font-weight: bold;
-  border-color: #665c54;
+.controls .thumbnail-view-button.active:hover:not(:disabled) {
+  background-color: #8ec07c;
+  /* Gruvbox Bright Aqua */
+  border-color: #8ec07c;
+  color: #1d2021;
 }
 
 /* --- Fullscreen Mode --- */
@@ -1049,9 +1192,16 @@
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
+  /* Shrink-to-fit would cap an absolutely positioned bar at the 50% of the
+     viewport to the right of its left edge, wrapping the groups in half */
+  width: max-content;
+  max-width: calc(100vw - 40px);
   display: flex;
-  gap: 12px;
-  background-color: rgba(40, 40, 40, 0.85);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 14px;
+  background-color: rgba(40, 40, 40, 0.9);
   border: 1px solid #504945;
   border-radius: 8px;
   padding: 10px 14px;
@@ -1059,23 +1209,36 @@
 }
 
 .fullscreen-controls button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   padding: 8px 14px;
   font-size: 0.95rem;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
   border-radius: 5px;
-  border: 1px solid #a89984;
-  background-color: transparent;
+  border: 1px solid #504945;
+  background-color: #3c3836;
+  /* Gruvbox Dark Gray */
   color: #ebdbb2;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.fullscreen-controls button:hover:not(:disabled) {
+  background-color: #504945;
+  border-color: #7c6f64;
 }
 
 .fullscreen-controls button:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
 .fullscreen-controls .fullscreen-exit {
-  background-color: #504945;
-  border-color: #665c54;
+  background-color: transparent;
+  border-color: #7c6f64;
+  color: #a89984;
 }
 
 /* --- Mobile Action Bar (rendered only on phone-sized screens) --- */
@@ -1369,25 +1532,20 @@
   }
 }
 /* --- Edited photos --- */
-.edit-photo-button {
-  background-color: #504945;
-  color: #ebdbb2;
-  font-weight: bold;
-  border-color: #665c54;
-}
-
 .edit-photo-button.edited {
   background-color: #b16286;
   /* Gruvbox Purple */
   color: #1d2021;
   border-color: #b16286;
+  font-weight: bold;
 }
 
-.compare-original-button {
-  background-color: #504945;
-  color: #ebdbb2;
-  font-weight: bold;
-  border-color: #665c54;
+.controls .edit-photo-button.edited:hover:not(:disabled),
+.fullscreen-controls .edit-photo-button.edited:hover:not(:disabled) {
+  background-color: #d3869b;
+  /* Gruvbox Bright Purple */
+  border-color: #d3869b;
+  color: #1d2021;
 }
 
 .compare-original-button.active {
@@ -1395,6 +1553,14 @@
   /* Gruvbox Aqua */
   color: #1d2021;
   border-color: #689d6a;
+  font-weight: bold;
+}
+
+.controls .compare-original-button.active:hover:not(:disabled) {
+  background-color: #8ec07c;
+  /* Gruvbox Bright Aqua */
+  border-color: #8ec07c;
+  color: #1d2021;
 }
 
 /* Marks an edited photo wherever its name is shown. */

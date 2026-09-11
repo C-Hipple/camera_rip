@@ -481,6 +481,7 @@ func main() {
 	http.HandleFunc("/api/edit-photo", corsHandler(editPhotoHandler))
 	http.HandleFunc("/api/revert-photo", corsHandler(revertPhotoHandler))
 	http.HandleFunc("/api/gallery-config", corsHandler(galleryConfigHandler))
+	http.HandleFunc("/api/gallery-albums", corsHandler(galleryAlbumsHandler))
 	http.HandleFunc("/api/gallery-upload", corsHandler(galleryUploadHandler))
 	http.HandleFunc("/photos/", corsHandler(servePhotoHandler))
 	http.HandleFunc("/thumbnail/", corsHandler(serveThumbnailHandler))
@@ -1607,7 +1608,11 @@ func exportStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 const (
 	galleryUploadPath    = "/api/upload"
+	galleryAlbumsPath    = "/api/albums"
 	galleryUploadTimeout = 2 * time.Minute
+	// The album list is a small read the upload modal waits on, so it gets a
+	// far shorter leash than an upload of a 40 MB photograph.
+	galleryAlbumsTimeout = 15 * time.Second
 	// Enough for the gallery's JSON answer; guards against a misconfigured
 	// base URL pointing at something that streams forever.
 	galleryResponseLimit = 1 << 20
@@ -1708,8 +1713,10 @@ func galleryImageBytes(photoPath, filename string) (string, []byte, error) {
 }
 
 // buildGalleryUpload assembles the multipart body the gallery expects: the
-// password, the image itself, and whichever of title/tags the user filled in.
-func buildGalleryUpload(filename string, image []byte, title, tags string) (*bytes.Buffer, string, error) {
+// password, the image itself, and whichever of title/tags/album the user filled
+// in. An empty album is left out entirely, which is what the gallery reads as
+// "file it nowhere".
+func buildGalleryUpload(filename string, image []byte, title, tags, album string) (*bytes.Buffer, string, error) {
 	body := &bytes.Buffer{}
 	mw := multipart.NewWriter(body)
 
@@ -1719,6 +1726,7 @@ func buildGalleryUpload(filename string, image []byte, title, tags string) (*byt
 	optional := []struct{ name, value string }{
 		{"title", strings.TrimSpace(title)},
 		{"tags", normalizeTags(tags)},
+		{"album", strings.TrimSpace(album)},
 	}
 	for _, field := range optional {
 		if field.value == "" {
@@ -1806,6 +1814,90 @@ func galleryConfigHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// galleryAlbum is one album of the gallery's list, pared down to what the
+// upload modal's dropdown needs.
+type galleryAlbum struct {
+	ID    string `json:"id"`
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	Count int    `json:"count"`
+}
+
+// fetchGalleryAlbums reads the album list from the gallery. The list is public
+// there, so unlike an upload this carries no password.
+func fetchGalleryAlbums() ([]galleryAlbum, error) {
+	client := &http.Client{Timeout: galleryAlbumsTimeout}
+	resp, err := client.Get(galleryBaseURL + galleryAlbumsPath)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, galleryResponseLimit))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		parsed := map[string]interface{}{}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			parsed = map[string]interface{}{}
+		}
+		// The gallery's own message beats anything this side could invent.
+		return nil, fmt.Errorf("%s", galleryErrorMessage(resp.StatusCode, parsed, body))
+	}
+
+	var parsed struct {
+		Albums []galleryAlbum `json:"albums"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("the gallery's album list was not the expected JSON")
+	}
+
+	// An album with neither an id nor a slug is nothing the upload could name,
+	// and one with no title is nothing the dropdown could label, so the slug
+	// stands in. A gallery with no albums yields an empty list, not nil, so the
+	// frontend always gets an array to iterate.
+	albums := make([]galleryAlbum, 0, len(parsed.Albums))
+	for _, album := range parsed.Albums {
+		if album.ID == "" && album.Slug == "" {
+			continue
+		}
+		if album.ID == "" {
+			album.ID = album.Slug
+		}
+		if album.Title == "" {
+			album.Title = album.Slug
+		}
+		albums = append(albums, album)
+	}
+	return albums, nil
+}
+
+// galleryAlbumsHandler hands the frontend the albums a photo can be filed into,
+// so the upload modal can offer them as a dropdown. It is a plain proxy: the
+// gallery is the one place the list lives, and asking it on each open keeps an
+// album created mid-session from being invisible here.
+func galleryAlbumsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		writeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if !galleryConfigured() {
+		writeJSONError(w, http.StatusServiceUnavailable, "Gallery uploads are not configured. Set GALLERY_BASE_URL and GALLERY_PASSWORD, then restart the server.")
+		return
+	}
+
+	albums, err := fetchGalleryAlbums()
+	if err != nil {
+		log.Printf("Gallery albums: %v", err)
+		writeJSONError(w, http.StatusBadGateway, fmt.Sprintf("Could not read the albums from %s: %v", galleryBaseURL, err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"albums": albums})
+}
+
 func galleryUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		writeJSONError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -1821,6 +1913,9 @@ func galleryUploadHandler(w http.ResponseWriter, r *http.Request) {
 		Filename  string `json:"filename"`
 		Title     string `json:"title"`
 		Tags      string `json:"tags"`
+		// Album is the id (or slug) of one of the albums /api/gallery-albums
+		// listed, or empty for a photo that belongs to no album.
+		Album string `json:"album"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
@@ -1847,7 +1942,7 @@ func galleryUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, contentType, err := buildGalleryUpload(uploadName, image, data.Title, data.Tags)
+	body, contentType, err := buildGalleryUpload(uploadName, image, data.Title, data.Tags, data.Album)
 	if err != nil {
 		log.Printf("Gallery upload: failed to build request body: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, "Failed to build the upload request")

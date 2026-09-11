@@ -373,6 +373,7 @@ type galleryUploadRequest struct {
 	password string
 	title    string
 	tags     string
+	album    string
 	filename string
 	body     []byte
 }
@@ -392,6 +393,7 @@ func newFakeGallery(t *testing.T, status int, response string, got *galleryUploa
 		got.password = r.FormValue("password")
 		got.title = r.FormValue("title")
 		got.tags = r.FormValue("tags")
+		got.album = r.FormValue("album")
 		if file, header, err := r.FormFile("photo"); err == nil {
 			defer file.Close()
 			got.filename = header.Filename
@@ -520,7 +522,7 @@ func TestGalleryUploadHandler(t *testing.T) {
 	galleryBaseURL = server.URL
 	galleryPassword = "hunter2"
 
-	w := postGalleryUpload(t, `{"directory":"`+directory+`","filename":"100_IMG_0001.JPG","title":"Sunrise","tags":"#film #mono"}`)
+	w := postGalleryUpload(t, `{"directory":"`+directory+`","filename":"100_IMG_0001.JPG","title":"Sunrise","tags":"#film #mono","album":"9f2c1ab4"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("gallery upload returned %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -533,6 +535,9 @@ func TestGalleryUploadHandler(t *testing.T) {
 	}
 	if got.tags != "film, mono" {
 		t.Errorf("gallery received tags %q, want %q", got.tags, "film, mono")
+	}
+	if got.album != "9f2c1ab4" {
+		t.Errorf("gallery received album %q, want the one picked in the modal", got.album)
 	}
 	if got.filename != "100_IMG_0001.JPG" {
 		t.Errorf("gallery received filename %q, want %q", got.filename, "100_IMG_0001.JPG")
@@ -578,8 +583,8 @@ func TestGalleryUploadHandlerRelaysGalleryErrors(t *testing.T) {
 	if reply.Error != "wrong password" {
 		t.Errorf("reply error = %q, want the gallery's own message", reply.Error)
 	}
-	if got.title != "" || got.tags != "" {
-		t.Errorf("optional fields were sent empty rather than omitted: title=%q tags=%q", got.title, got.tags)
+	if got.title != "" || got.tags != "" || got.album != "" {
+		t.Errorf("optional fields were sent empty rather than omitted: title=%q tags=%q album=%q", got.title, got.tags, got.album)
 	}
 }
 
@@ -608,6 +613,125 @@ func TestGalleryUploadHandlerRejectsBadRequests(t *testing.T) {
 	// With no gallery configured the endpoint says so rather than trying.
 	galleryBaseURL, galleryPassword = "", ""
 	if w := postGalleryUpload(t, `{"directory":"`+directory+`","filename":"100_IMG_0001.JPG"}`); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("unconfigured gallery returned %d, want 503", w.Code)
+	}
+}
+
+// newFakeAlbumGallery stands in for the gallery's album list, answering with the
+// given status and JSON body.
+func newFakeAlbumGallery(t *testing.T, status int, response string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/albums" {
+			t.Errorf("gallery got request for %q, want /api/albums", r.URL.Path)
+		}
+		if password := r.FormValue("password"); password != "" {
+			t.Errorf("the album list carried a password (%q); it is a public read", password)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write([]byte(response))
+	}))
+}
+
+func getGalleryAlbums(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/api/gallery-albums", nil)
+	w := httptest.NewRecorder()
+	galleryAlbumsHandler(w, req)
+	return w
+}
+
+// decodeAlbums reads the album list out of a handler's reply.
+func decodeAlbums(t *testing.T, w *httptest.ResponseRecorder) []galleryAlbum {
+	t.Helper()
+	var reply struct {
+		Albums []galleryAlbum `json:"albums"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("could not decode reply %q: %v", w.Body.String(), err)
+	}
+	return reply.Albums
+}
+
+func TestGalleryAlbumsHandler(t *testing.T) {
+	server := newFakeAlbumGallery(t, http.StatusOK, `{"albums":[
+		{"id":"9f2c1ab4","slug":"iceland-2024","title":"Iceland, 2024","count":18,"url":"/album/iceland-2024"},
+		{"id":"0e798 68e","slug":"estuary","title":"","count":0},
+		{"slug":"no-id","title":"No id"},
+		{"title":"Nothing to name it by"}
+	]}`)
+	defer server.Close()
+
+	galleryBaseURL = server.URL
+	galleryPassword = "hunter2"
+
+	w := getGalleryAlbums(t)
+	if w.Code != http.StatusOK {
+		t.Fatalf("gallery albums returned %d, want 200: %s", w.Code, w.Body.String())
+	}
+	albums := decodeAlbums(t, w)
+	if len(albums) != 3 {
+		t.Fatalf("got %d albums, want 3 (the one with neither id nor slug is unusable): %v", len(albums), albums)
+	}
+	if albums[0] != (galleryAlbum{ID: "9f2c1ab4", Slug: "iceland-2024", Title: "Iceland, 2024", Count: 18}) {
+		t.Errorf("first album = %+v", albums[0])
+	}
+	// An untitled album is labelled by its slug rather than by nothing at all.
+	if albums[1].Title != "estuary" {
+		t.Errorf("untitled album title = %q, want its slug", albums[1].Title)
+	}
+	// An album the gallery gave no id for is still nameable by its slug.
+	if albums[2].ID != "no-id" {
+		t.Errorf("album without an id = %q, want its slug", albums[2].ID)
+	}
+}
+
+func TestGalleryAlbumsHandlerWithNoAlbums(t *testing.T) {
+	server := newFakeAlbumGallery(t, http.StatusOK, `{"albums":[]}`)
+	defer server.Close()
+
+	galleryBaseURL = server.URL
+	galleryPassword = "hunter2"
+
+	w := getGalleryAlbums(t)
+	if w.Code != http.StatusOK {
+		t.Fatalf("gallery albums returned %d, want 200", w.Code)
+	}
+	// The frontend iterates the answer, so an empty gallery sends [] not null.
+	if body := strings.TrimSpace(w.Body.String()); body != `{"albums":[]}` {
+		t.Errorf("body = %s, want an empty list", body)
+	}
+}
+
+func TestGalleryAlbumsHandlerReportsFailures(t *testing.T) {
+	server := newFakeAlbumGallery(t, http.StatusInternalServerError, `{"error":"the gallery fell over"}`)
+	defer server.Close()
+
+	galleryBaseURL = server.URL
+	galleryPassword = "hunter2"
+
+	// A gallery that cannot answer is a bad gateway from here, carrying its own
+	// message so the toast says something worth reading.
+	w := getGalleryAlbums(t)
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("failing gallery returned %d, want 502", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "the gallery fell over") {
+		t.Errorf("reply %s does not carry the gallery's own message", w.Body.String())
+	}
+
+	// Something that answers but is not the album list at all.
+	junk := newFakeAlbumGallery(t, http.StatusOK, `<html>not json</html>`)
+	defer junk.Close()
+	galleryBaseURL = junk.URL
+	if w := getGalleryAlbums(t); w.Code != http.StatusBadGateway {
+		t.Errorf("unparseable album list returned %d, want 502", w.Code)
+	}
+
+	// With no gallery configured the endpoint says so rather than trying.
+	galleryBaseURL, galleryPassword = "", ""
+	if w := getGalleryAlbums(t); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("unconfigured gallery returned %d, want 503", w.Code)
 	}
 }

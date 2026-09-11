@@ -12,7 +12,7 @@ A web-based application for importing photos from your camera's SD card, reviewi
 - **Batch Export**: Copy selected JPEGs to an export folder
 - **Raw File Export**: Copy corresponding raw files (Canon CR3, Olympus ORF) directly from SD card for selected photos
 - **Export Status Tracking**: Track how many raw files have been exported vs. how many are missing
-- **Upload to a Gallery**: Post a selected photo straight to a photo gallery with a title and hashtags
+- **Upload to a Gallery**: Post a selected photo straight to a photo gallery with a title, hashtags and an album
 
 ## Screenshot
 
@@ -74,7 +74,7 @@ starting the server:
 
 | Variable | Example | What it is |
 | --- | --- | --- |
-| `GALLERY_BASE_URL` | `https://gallery.example.com` | The gallery's root URL. Uploads go to `<base>/api/upload`. |
+| `GALLERY_BASE_URL` | `https://gallery.example.com` | The gallery's root URL. Uploads go to `<base>/api/upload`, and the album list is read from `<base>/api/albums`. |
 | `GALLERY_PASSWORD` | `hunter2` | The same password you sign in to the gallery with. |
 
 ```bash
@@ -120,12 +120,17 @@ The frontend is embedded directly into the Go binary using Go's `embed` package.
 3. Select photos you want to keep:
    - Press **`s`** to select the current photo
    - Press **`x`** to unselect
-4. Use the **pin feature** to compare photos:
+4. The control bar under the film strip is split in two: the top row acts on
+   the photo on screen (navigate, select, mark for deletion, edit, compare,
+   upload, change view) and the row below the divider acts on the whole
+   session (save, export raw, delete from disk). Every shortcut is printed on
+   the button that uses it
+5. Use the **pin feature** to compare photos:
    - Press **`h`** to pin the current photo
    - Navigate to other photos to compare side-by-side
    - Press **`h`** again or **`Esc`** to unpin
-5. Click **Save selected photos** when done
-6. Selected JPEGs are copied to `~/Pictures/photos/[timestamp]/selected/`
+6. Click **Save N Selections** on the session row when done
+7. Selected JPEGs are copied to `~/Pictures/photos/[timestamp]/selected/`
 
 ### 3. Edit a Photo
 
@@ -149,11 +154,11 @@ so the Edit button is disabled for them.
 
 ### 4. Export Raw Files
 
-1. After saving selected photos, the **Export Raw Files** button becomes enabled
+1. After saving selected photos, the **Export RAW** button becomes enabled
 2. Keep your SD card connected
-3. Click **Export Raw Files** to copy raw files (CR3 or ORF) from the SD card
+3. Click **Export RAW** to copy raw files (CR3 or ORF) from the SD card
 4. Raw files are copied to `~/Pictures/photos/[timestamp]/selected/raw/`
-5. The button shows how many raw files are missing
+5. The button shows how many raw files are still missing
 6. Export status is displayed below the controls
 
 ### 5. Upload to a Gallery
@@ -162,11 +167,18 @@ so the Edit button is disabled for them.
 2. Give it a title and hashtags — both optional
    - `#film #goldenhour` splits on the hashes
    - `film, golden hour` splits on the commas, so multi-word tags survive
-3. Click **Upload**; a link to the published photograph appears in the toast
+3. Pick an **Album** if the gallery has any. The choice stays put for the next
+   upload, so a whole shoot only needs choosing once
+4. Click **Upload**; a link to the published photograph appears in the toast
 
 The photo is posted to `<GALLERY_BASE_URL>/api/upload` as `multipart/form-data`.
 RAW files are uploaded as their embedded JPEG preview, since galleries take JPEG,
 PNG and GIF only.
+
+The album dropdown is filled from `<GALLERY_BASE_URL>/api/albums`, read fresh
+each time the modal opens so an album created in the gallery mid-session is not
+invisible here. A gallery with no albums — or one that cannot be reached — simply
+leaves the dropdown out; the upload works the same without one.
 
 ## Keyboard Shortcuts
 
