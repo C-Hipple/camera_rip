@@ -137,9 +137,14 @@ The frontend is embedded directly into the Go binary using Go's `embed` package.
 1. With a photo on screen, press **`e`** (or click **Edit**) to open the editor
 2. Drag on the preview to draw a crop, drag inside the box to move it, or drag a
    corner to resize. A single click outside the box clears it back to the full frame
-3. Drag the **Exposure** (±2 EV) and **Black level** (±100) sliders — the preview
+3. Tick **Lock ratio** to hold the crop at a fixed shape — Original, 1:1, 5:4, 4:3,
+   3:2 or 16:9. Locking reshapes the box on screen right away and every later drag
+   keeps that shape; presets follow the photo, so 3:2 stays upright on a portrait
+   shot. The lock stays on as you move through the shoot, so cropping a whole
+   session to one shape only needs ticking once
+4. Drag the **Exposure** (±2 EV) and **Black level** (±100) sliders — the preview
    applies the same maths the saved file will, so what you see is what you get
-4. Click **Apply Edit**
+5. Click **Apply Edit**
 
 The first edit copies the untouched original to
 `~/Pictures/photos/[timestamp]/unedited/`, and every later edit re-renders from

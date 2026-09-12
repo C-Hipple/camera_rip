@@ -143,8 +143,51 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 12px;
     margin-top: 14px;
+}
+
+.edit-aspect-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.edit-aspect-lock {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #ebdbb2;
+    /* Gruvbox Light */
+    font-size: 0.85rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.edit-aspect-lock input {
+    accent-color: #d79921;
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.edit-aspect-lock input:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+/* .modal-input is a full-width stacked form field; the ratio picker sits inline
+   instead, so it drops the width and margin but keeps the dark-select arrow —
+   hence the right padding the arrow is positioned against stays put. */
+select.edit-aspect-select {
+    width: auto;
+    margin: 0;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    padding-left: 8px;
+    font-size: 0.85rem;
 }
 
 .edit-crop-summary {
