@@ -750,10 +750,10 @@ function App() {
         setIsUploadingToGallery(false);
     };
 
-    // Apply crop/exposure/black adjustments to the photo in the editor. The
+    // Apply the editor's crop, tone and sky-balance adjustments to the photo. The
     // backend renders from the pristine original every time, so re-editing
     // never compounds: whatever the sliders say is what the photo becomes.
-    const handleApplyEdit = async ({ crop, exposure, black }) => {
+    const handleApplyEdit = async ({ crop, exposure, black, highlights, sky, horizon }) => {
         const filename = editPhoto;
         if (!filename) return;
         setIsSavingEdit(true);
@@ -762,7 +762,10 @@ function App() {
             const response = await fetch(`${API_URL}/api/edit-photo`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ directory: currentDirectory, photo: filename, crop, exposure, black })
+                body: JSON.stringify({
+                    directory: currentDirectory, photo: filename,
+                    crop, exposure, black, highlights, sky, horizon
+                })
             });
             const data = await response.json().catch(() => ({}));
             if (response.ok) {
@@ -1121,7 +1124,7 @@ function App() {
                                 onClick={() => setEditPhoto(currentPhotoName)}
                                 disabled={!canEditCurrent || isSavingEdit}
                                 className={`edit-photo-button ${isEdited ? 'edited' : ''}`}
-                                title={canEditCurrent ? 'Crop, exposure and black level (e)' : 'RAW files cannot be edited'}>
+                                title={canEditCurrent ? 'Crop, exposure, highlights and sky balance (e)' : 'RAW files cannot be edited'}>
                                 Edit<kbd aria-hidden="true">e</kbd>{isEdited && <span className="button-mark">✎</span>}
                             </button>
                             {canUploadToGallery && (
@@ -1681,7 +1684,7 @@ function App() {
                                 onClick={() => setEditPhoto(currentPhotoName)}
                                 disabled={!canEditCurrent || isSavingEdit}
                                 className={`edit-photo-button ${isEdited ? 'edited' : ''}`}
-                                title={canEditCurrent ? 'Crop, exposure and black level (e)' : 'RAW files cannot be edited'}
+                                title={canEditCurrent ? 'Crop, exposure, highlights and sky balance (e)' : 'RAW files cannot be edited'}
                             >
                                 Edit<kbd aria-hidden="true">e</kbd>{isEdited && <span className="button-mark">✎</span>}
                             </button>

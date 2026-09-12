@@ -43,6 +43,30 @@
     height: auto;
 }
 
+/* Where the sky pull runs out. It is a guide, not a handle — the horizon slider
+   moves it — so it never swallows a pointer meant for the crop underneath. */
+.edit-horizon-guide {
+    position: absolute;
+    left: 0;
+    right: 0;
+    pointer-events: none;
+    border-top: 1px dashed #83a598;
+    /* Gruvbox Blue */
+}
+
+.edit-horizon-label {
+    position: absolute;
+    right: 4px;
+    top: 2px;
+    color: #83a598;
+    background-color: rgba(40, 40, 40, 0.7);
+    border-radius: 2px;
+    padding: 0 4px;
+    font-size: 0.7rem;
+    font-family: monospace;
+    line-height: 1.5;
+}
+
 /* The oversized shadow dims everything outside the crop; the frame clips it. */
 .edit-crop-box {
     position: absolute;

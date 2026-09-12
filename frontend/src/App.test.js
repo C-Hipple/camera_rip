@@ -278,6 +278,9 @@ test('the editor posts the slider values and flags the photo as edited', async (
   fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
   fireEvent.change(await screen.findByLabelText(/Exposure/i), { target: { value: '0.5' } });
   fireEvent.change(screen.getByLabelText(/Black level/i), { target: { value: '20' } });
+  fireEvent.change(screen.getByLabelText(/Highlights/i), { target: { value: '-60' } });
+  fireEvent.change(screen.getByLabelText(/^Sky$/i), { target: { value: '70' } });
+  fireEvent.change(screen.getByLabelText(/Horizon/i), { target: { value: '40' } });
   fireEvent.click(screen.getByRole('button', { name: /Apply Edit/i }));
 
   await waitFor(() => expect(postedTo('/api/edit-photo')).toEqual({
@@ -286,6 +289,9 @@ test('the editor posts the slider values and flags the photo as edited', async (
     crop: null,
     exposure: 0.5,
     black: 20,
+    highlights: -60,
+    sky: 70,
+    horizon: 40,
   }));
 
   // A successful edit closes the modal and marks the photo everywhere it appears

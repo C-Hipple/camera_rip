@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -57,15 +58,15 @@ func decodeBytes(t *testing.T, data []byte) image.Image {
 }
 
 func TestBuildToneLUT(t *testing.T) {
-	identity := buildToneLUT(0, 0)
+	identity := buildToneLUT(0, 0, 0, 0)
 	for i := range identity {
 		if int(identity[i]) != i {
 			t.Fatalf("neutral LUT changed %d to %d", i, identity[i])
 		}
 	}
 
-	brighter := buildToneLUT(1, 0)
-	darker := buildToneLUT(-1, 0)
+	brighter := buildToneLUT(1, 0, 0, 0)
+	darker := buildToneLUT(-1, 0, 0, 0)
 	if brighter[128] <= 128 {
 		t.Errorf("+1 stop mapped 128 to %d, want brighter", brighter[128])
 	}
@@ -79,8 +80,8 @@ func TestBuildToneLUT(t *testing.T) {
 		t.Errorf("+1 stop mapped white to %d, want 255", brighter[255])
 	}
 
-	crushed := buildToneLUT(0, 100)
-	lifted := buildToneLUT(0, -100)
+	crushed := buildToneLUT(0, 100, 0, 0)
+	lifted := buildToneLUT(0, -100, 0, 0)
 	if crushed[40] != 0 {
 		t.Errorf("black level +100 mapped 40 to %d, want the shadows crushed to 0", crushed[40])
 	}
@@ -97,23 +98,346 @@ func TestBuildToneLUT(t *testing.T) {
 // file cannot drift apart.
 func TestToneLUTReferenceValues(t *testing.T) {
 	tests := []struct {
-		exposure float64
-		black    float64
-		input    int
-		want     uint8
+		exposure   float64
+		black      float64
+		highlights float64
+		skyPull    float64
+		input      int
+		want       uint8
 	}{
-		{1, 0, 128, 175},
-		{-1, 0, 128, 93},
-		{0, 50, 128, 110},
-		{0, -50, 0, 28},
-		{0.5, 25, 200, 233},
-		{1, 0, 64, 88},
+		{1, 0, 0, 0, 128, 175},
+		{-1, 0, 0, 0, 128, 93},
+		{0, 50, 0, 0, 128, 110},
+		{0, -50, 0, 0, 0, 28},
+		{0.5, 25, 0, 0, 200, 233},
+		{1, 0, 0, 0, 64, 88},
+		// Highlight recovery: a bright value rolls down, and pure white with it.
+		{0, 0, -100, 0, 200, 183},
+		{0, 0, -100, 0, 255, 208},
+		// The pair the bird case turns on — +1.5 stops clips 200 to white, and
+		// the shoulder brings it back under with room to spare.
+		{1.5, 0, 0, 0, 200, 255},
+		{1.5, 0, -80, 0, 200, 235},
+		// A sky pull darkens what is already bright and ignores what is not.
+		{0, 0, 0, 1, 230, 168},
+		{0, 0, 0, 2, 230, 122},
+		{0, 0, 0, 2, 60, 60},
+		// And all four together, the way the sky-balance preset stacks them.
+		{1.5, 0, -60, 1.2, 210, 216},
 	}
 	for _, tt := range tests {
-		got := buildToneLUT(tt.exposure, tt.black)[tt.input]
+		got := buildToneLUT(tt.exposure, tt.black, tt.highlights, tt.skyPull)[tt.input]
 		if got != tt.want {
-			t.Errorf("buildToneLUT(%v, %v)[%d] = %d, want %d", tt.exposure, tt.black, tt.input, got, tt.want)
+			t.Errorf("buildToneLUT(%v, %v, %v, %v)[%d] = %d, want %d",
+				tt.exposure, tt.black, tt.highlights, tt.skyPull, tt.input, got, tt.want)
 		}
+	}
+}
+
+// TestApplyHighlights covers the shoulder on its own: what it leaves alone,
+// what it brings back under white, and that the two directions are inverses.
+func TestApplyHighlights(t *testing.T) {
+	// Nothing below the knee moves. At -100 the knee sits at 0.5.
+	for _, v := range []float64{0, 0.25, 0.5} {
+		if got := applyHighlights(v, -1); got != v {
+			t.Errorf("applyHighlights(%v, -1) = %v, want it left alone below the knee", v, got)
+		}
+	}
+
+	// The whole range an exposure lift can reach lands under white, still in
+	// order, which is the detail that would otherwise have clipped. (The
+	// shoulder only approaches white, so far enough out it rounds onto it.)
+	prev := 0.0
+	for _, v := range []float64{0.6, 0.8, 1.0, 1.5, 3.0, 6.0} {
+		got := applyHighlights(v, -1)
+		if got >= 1 {
+			t.Errorf("applyHighlights(%v, -1) = %v, want it under white", v, got)
+		}
+		if got <= prev {
+			t.Errorf("applyHighlights(%v, -1) = %v, want more than the %v below it", v, got, prev)
+		}
+		prev = got
+	}
+
+	// The shoulder leaves the knee at slope 1, so there is no kink there.
+	const knee, eps = 0.5, 1e-6
+	slope := (applyHighlights(knee+eps, -1) - knee) / eps
+	if math.Abs(slope-1) > 1e-3 {
+		t.Errorf("shoulder slope at the knee = %v, want 1", slope)
+	}
+
+	// Pushing highlights up is the exact inverse of rolling them off.
+	for _, v := range []float64{0.55, 0.7, 0.9, 1.4} {
+		rolled := applyHighlights(v, -0.6)
+		if back := applyHighlights(rolled, 0.6); math.Abs(back-v) > 1e-9 {
+			t.Errorf("highlights -60 then +60 turned %v into %v", v, back)
+		}
+	}
+
+	if got := applyHighlights(0.9, 0); got != 0.9 {
+		t.Errorf("applyHighlights(0.9, 0) = %v, want the value untouched", got)
+	}
+}
+
+// TestHighlightRecoveryUnclipsTheSky is the bird case in LUT form: raising the
+// exposure enough to see the bird flattens the top of the range to white, and
+// the highlight slider has to put the steps back.
+func TestHighlightRecoveryUnclipsTheSky(t *testing.T) {
+	lifted := buildToneLUT(1.5, 0, 0, 0)
+	if lifted[190] != 255 || lifted[255] != 255 {
+		t.Fatalf("+1.5 stops gave %d..%d for 190..255, want both clipped to white", lifted[190], lifted[255])
+	}
+
+	// The shoulder turns that plateau back into a ramp. It is a compressed one —
+	// sixty-odd inputs sharing a dozen-odd 8-bit outputs — but a sky that rises
+	// instead of sitting flat at white is the difference being asked for.
+	recovered := buildToneLUT(1.5, 0, -80, 0)
+	if recovered[255] >= 255 {
+		t.Errorf("recovered white = %d, want it under 255 so the sky holds detail", recovered[255])
+	}
+	if recovered[255] <= recovered[190] {
+		t.Errorf("recovered 190..255 spans %d..%d, want it still rising",
+			recovered[190], recovered[255])
+	}
+	levels := map[uint8]bool{}
+	for i := 190; i < 255; i++ {
+		if recovered[i] > recovered[i+1] {
+			t.Errorf("recovered LUT fell back at %d (%d -> %d), want the curve monotonic",
+				i, recovered[i], recovered[i+1])
+		}
+		levels[recovered[i]] = true
+	}
+	if len(levels) < 8 {
+		t.Errorf("recovered 190..255 onto %d distinct levels, want the sky's steps kept apart", len(levels))
+	}
+	// And the bird itself, down in the midtones, keeps the exposure it was given.
+	if recovered[90] != lifted[90] {
+		t.Errorf("recovery moved midtone 90 from %d to %d, want the bird left bright",
+			lifted[90], recovered[90])
+	}
+}
+
+func TestSkyLumWeight(t *testing.T) {
+	if got := skyLumWeight(skyLumLow); got != 0 {
+		t.Errorf("skyLumWeight(%v) = %v, want nothing below the low end", skyLumLow, got)
+	}
+	if got := skyLumWeight(skyLumHigh); got != 1 {
+		t.Errorf("skyLumWeight(%v) = %v, want the full pull above the high end", skyLumHigh, got)
+	}
+	// A bird reads as a midtone or darker against the sky, so it takes little
+	// or none of the pull while the sky above it takes all of it.
+	if bird, sky := skyLumWeight(0.3), skyLumWeight(0.92); bird != 0 || sky != 1 {
+		t.Errorf("weights bird = %v, sky = %v, want 0 and 1", bird, sky)
+	}
+	prev := -1.0
+	for v := 0.0; v <= 1.0001; v += 0.05 {
+		got := skyLumWeight(v)
+		if got < prev {
+			t.Fatalf("skyLumWeight(%v) = %v, want it never to fall back", v, got)
+		}
+		prev = got
+	}
+}
+
+func TestSkyGradient(t *testing.T) {
+	const height = 200
+
+	// Everything down to the horizon takes the pull in full; the feather band
+	// below it eases out, and past that the ground is left alone.
+	for _, y := range []int{0, 50, 99} {
+		if got := skyGradient(y, height, 50); got != 1 {
+			t.Errorf("gradient at row %d (above a 50%% horizon) = %v, want the full pull", y, got)
+		}
+	}
+	if mid := skyGradient(125, height, 50); mid <= 0 || mid >= 1 {
+		t.Errorf("gradient halfway through the feather = %v, want it part way out", mid)
+	}
+	for _, y := range []int{150, 180, height - 1} {
+		if got := skyGradient(y, height, 50); got != 0 {
+			t.Errorf("gradient at row %d (past the feather) = %v, want 0", y, got)
+		}
+	}
+
+	// A horizon at the bottom edge pushes the whole feather off the frame, so
+	// the pull is even everywhere — what a bird against nothing but sky needs.
+	for _, y := range []int{0, 100, height - 1} {
+		if got := skyGradient(y, height, 100); got != 1 {
+			t.Errorf("gradient at row %d with the horizon at the bottom = %v, want the full pull", y, got)
+		}
+	}
+
+	prev := 2.0
+	for y := 0; y < height; y++ {
+		got := skyGradient(y, height, 50)
+		if got > prev {
+			t.Fatalf("gradient rose again at row %d (%v after %v)", y, got, prev)
+		}
+		prev = got
+	}
+
+	if got := skyGradient(0, 0, 50); got != 0 {
+		t.Errorf("gradient of an empty frame = %v, want 0", got)
+	}
+}
+
+func TestSkyPullAndHorizonFromSlider(t *testing.T) {
+	tests := []struct {
+		edit    photoEdit
+		pull    float64
+		horizon float64
+	}{
+		{photoEdit{}, 0, defaultHorizon},
+		{photoEdit{Sky: -20}, 0, defaultHorizon},
+		{photoEdit{Sky: 50, Horizon: 30}, maxSkyPull / 2, 30},
+		{photoEdit{Sky: 100, Horizon: 100}, maxSkyPull, 100},
+		// An edit saved before the horizon control existed covers the whole frame.
+		{photoEdit{Sky: 100}, maxSkyPull, 100},
+		// A horizon too thin to fade across is widened rather than drawn as an edge.
+		{photoEdit{Sky: 100, Horizon: 1}, maxSkyPull, minHorizon},
+		{photoEdit{Sky: 200, Horizon: 400}, maxSkyPull, 100},
+	}
+	for _, tt := range tests {
+		if got := tt.edit.skyPullStops(); got != tt.pull {
+			t.Errorf("%+v.skyPullStops() = %v, want %v", tt.edit, got, tt.pull)
+		}
+		if got := tt.edit.horizonPercent(); got != tt.horizon {
+			t.Errorf("%+v.horizonPercent() = %v, want %v", tt.edit, got, tt.horizon)
+		}
+	}
+
+	// A sky pull is a real edit; a slider left at zero is not.
+	if !(photoEdit{Sky: 0, Horizon: 40}).isIdentity() {
+		t.Error("a horizon with no pull behind it should count as no edit")
+	}
+	if (photoEdit{Sky: 40}).isIdentity() || (photoEdit{Highlights: -40}).isIdentity() {
+		t.Error("a sky pull or a highlight roll-off should count as an edit")
+	}
+}
+
+// skySceneGrey encodes the shape of a bird photo: bright sky across the top
+// half, a dark bird in it, and darker ground below the horizon. Every pixel is
+// grey, so one channel tells the whole story.
+func skySceneGrey(t *testing.T, sky, bird, ground uint8) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 40, 40))
+	for y := 0; y < 40; y++ {
+		for x := 0; x < 40; x++ {
+			v := sky
+			if y >= 20 {
+				v = ground
+			} else if y >= 4 && y < 9 && x >= 16 && x < 25 {
+				v = bird
+			}
+			img.Set(x, y, color.RGBA{R: v, G: v, B: v, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func greyAt(t *testing.T, img image.Image, x, y int) int {
+	t.Helper()
+	b := img.Bounds()
+	r, _, _, _ := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
+	return int(r >> 8)
+}
+
+// TestRenderEditBalancesTheSky is the whole feature end to end: lift the
+// exposure for the bird, then take the glare back off the sky without dragging
+// the bird or the ground down with it.
+func TestRenderEditBalancesTheSky(t *testing.T) {
+	src := skySceneGrey(t, 228, 70, 96)
+
+	// Lifting the exposure alone is the problem being fixed: the sky clips.
+	lifted, err := renderEdit(src, photoEdit{Exposure: 1.5})
+	if err != nil {
+		t.Fatalf("renderEdit() error = %v", err)
+	}
+	if got := greyAt(t, decodeBytes(t, lifted), 2, 2); got != 255 {
+		t.Fatalf("sky after +1.5 stops = %d, want it blown to 255 for the test to mean anything", got)
+	}
+
+	balanced, err := renderEdit(src, photoEdit{Exposure: 1.5, Highlights: -60, Sky: 80, Horizon: 50})
+	if err != nil {
+		t.Fatalf("renderEdit() error = %v", err)
+	}
+	out := decodeBytes(t, balanced)
+
+	if sky := greyAt(t, out, 2, 2); sky >= 250 || sky <= 128 {
+		t.Errorf("balanced sky = %d, want it off the clipping point but still sky", sky)
+	}
+	// The bird keeps the exposure it was lifted to: it is darker than the sky,
+	// so the pull skips it even though it sits inside the gradient.
+	bird := greyAt(t, out, 20, 6)
+	birdLifted := greyAt(t, decodeBytes(t, lifted), 20, 6)
+	if bird != birdLifted {
+		t.Errorf("bird = %d, want the %d the exposure lift gave it", bird, birdLifted)
+	}
+	if bird <= 70 {
+		t.Errorf("bird = %d, want it brighter than the %d it started at", bird, 70)
+	}
+	// And the ground well below the horizon is outside the gradient entirely.
+	ground := greyAt(t, out, 20, 34)
+	groundLifted := greyAt(t, decodeBytes(t, lifted), 20, 34)
+	if ground != groundLifted {
+		t.Errorf("ground = %d, want the %d it had past the feather", ground, groundLifted)
+	}
+
+	// The sky above the horizon is pulled evenly — the gradient is there to keep
+	// the pull off the ground, not to shade the sky itself.
+	if top, low := greyAt(t, out, 2, 1), greyAt(t, out, 2, 18); top != low {
+		t.Errorf("sky at the top = %d and just above the horizon = %d, want them even", top, low)
+	}
+
+	// Between the two the pull eases away rather than stopping at a line, so the
+	// ground gets steadily lighter across the feather band.
+	prev := -1
+	for y := 20; y <= 34; y++ {
+		got := greyAt(t, out, 20, y)
+		if got < prev {
+			t.Fatalf("ground at row %d = %d, want it no darker than the %d above it", y, got, prev)
+		}
+		prev = got
+	}
+	if first, last := greyAt(t, out, 20, 21), greyAt(t, out, 20, 34); first >= last {
+		t.Errorf("ground runs %d..%d across the feather, want the pull easing off", first, last)
+	}
+}
+
+// TestRenderEditGradesBeforeCropping pins the gradient to the whole frame, so
+// moving a crop around does not drag the sky pull along with it.
+func TestRenderEditGradesBeforeCropping(t *testing.T) {
+	src := skySceneGrey(t, 228, 70, 228) // bright top and bottom, so only the grade shows
+	edit := photoEdit{Sky: 100, Horizon: 50}
+
+	full, err := renderEdit(src, edit)
+	if err != nil {
+		t.Fatalf("renderEdit() error = %v", err)
+	}
+	wholeFrame := decodeBytes(t, full)
+
+	edit.Crop = &cropRect{X: 0, Y: 0.5, W: 1, H: 0.5}
+	cropped, err := renderEdit(src, edit)
+	if err != nil {
+		t.Fatalf("renderEdit() error = %v", err)
+	}
+	out := decodeBytes(t, cropped)
+
+	// Row n of a bottom-half crop is row 20+n of the frame and has to carry that
+	// row's share of the gradient. Re-anchoring to the crop would start the pull
+	// over at full strength here, darkening rows the horizon had already let go.
+	for _, n := range []int{0, 5, 10, 15} {
+		if got, want := greyAt(t, out, 2, n), greyAt(t, wholeFrame, 2, 20+n); got != want {
+			t.Errorf("row %d of a bottom-half crop = %d, want row %d of the whole frame (%d)",
+				n, got, 20+n, want)
+		}
+	}
+	// The sanity check on that: the gradient really has run out by then.
+	if got := greyAt(t, wholeFrame, 2, 35); got != greyAt(t, decodeBytes(t, skySceneGrey(t, 228, 70, 228)), 2, 35) {
+		t.Errorf("row 35 of the whole frame = %d, want it left ungraded past the feather", got)
 	}
 }
 
@@ -348,7 +672,8 @@ func TestEditPhotoHandlerBacksUpOriginalAndRecordsEdit(t *testing.T) {
 	directory := withTestSession(t, "100_IMG_0001.png", original)
 
 	w := postJSON(t, editPhotoHandler, "/api/edit-photo",
-		`{"directory":"`+directory+`","photo":"100_IMG_0001.png","crop":{"x":0,"y":0,"w":0.5,"h":1},"exposure":0.5,"black":10}`)
+		`{"directory":"`+directory+`","photo":"100_IMG_0001.png","crop":{"x":0,"y":0,"w":0.5,"h":1},`+
+			`"exposure":0.5,"black":10,"highlights":-40,"sky":65,"horizon":35}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("edit returned %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -383,6 +708,9 @@ func TestEditPhotoHandlerBacksUpOriginalAndRecordsEdit(t *testing.T) {
 	got := record["100_IMG_0001.png"]
 	if got.Exposure != 0.5 || got.Black != 10 || got.Crop == nil || got.Crop.W != 0.5 {
 		t.Errorf("edit record = %+v, want the submitted adjustments", got)
+	}
+	if got.Highlights != -40 || got.Sky != 65 || got.Horizon != 35 {
+		t.Errorf("edit record = %+v, want the sky settings recorded too", got)
 	}
 	if got.EditedAt == "" {
 		t.Error("edit record has no timestamp")
@@ -500,6 +828,9 @@ func TestEditPhotoHandlerRejectsBadRequests(t *testing.T) {
 		{"missing photo field", `{"directory":"` + directory + `"}`},
 		{"crop off the edge", `{"directory":"` + directory + `","photo":"shot.png","crop":{"x":0.9,"y":0,"w":0.5,"h":0.5}}`},
 		{"exposure out of range", `{"directory":"` + directory + `","photo":"shot.png","exposure":50}`},
+		{"highlights out of range", `{"directory":"` + directory + `","photo":"shot.png","highlights":160}`},
+		{"sky below zero", `{"directory":"` + directory + `","photo":"shot.png","sky":-10}`},
+		{"horizon past the frame", `{"directory":"` + directory + `","photo":"shot.png","sky":50,"horizon":140}`},
 	}
 	for _, tt := range tests {
 		if w := postJSON(t, editPhotoHandler, "/api/edit-photo", tt.body); w.Code != http.StatusBadRequest {
