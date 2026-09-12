@@ -133,6 +133,52 @@
     margin-top: 16px;
 }
 
+.edit-group-title {
+    color: #a89984;
+    /* Gruvbox Gray */
+    font-size: 0.75rem;
+    font-weight: bold;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0 0 8px 0;
+}
+
+/* The first group puts the picker on the heading's line, so the button sits
+   with the two sliders it drives rather than adrift among all of them. */
+.edit-group-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.edit-group-row .edit-group-title {
+    margin: 0;
+}
+
+.edit-picker-button {
+    padding: 4px 10px;
+    font-size: 0.8rem;
+    font-weight: normal;
+}
+
+/* Armed, the button reads as held down and the photo takes the eyedropper. */
+.edit-picker-button.armed {
+    background-color: #d79921;
+    /* Gruvbox Yellow */
+    color: #282828;
+}
+
+.edit-canvas-frame.picking {
+    cursor: crosshair;
+}
+
+/* Tone follows Colour, so its heading needs the air the first one gets above. */
+.edit-controls .edit-group-title:not(:first-child) {
+    margin-top: 16px;
+}
+
 .edit-slider-row {
     display: flex;
     align-items: center;
