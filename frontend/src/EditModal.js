@@ -49,6 +49,68 @@ const rectBetween = (a, b) => ({
     h: Math.abs(b.y - a.y),
 });
 
+// The ratios the crop can be locked to, written long side first. "Original"
+// keeps the photo's own shape, which is also what the uncropped frame has.
+export const ASPECT_PRESETS = [
+    { value: 'original', label: 'Original' },
+    { value: '1:1', label: 'Square 1:1', ratio: [1, 1] },
+    { value: '5:4', label: '5:4', ratio: [5, 4] },
+    { value: '4:3', label: '4:3', ratio: [4, 3] },
+    { value: '3:2', label: '3:2', ratio: [3, 2] },
+    { value: '16:9', label: '16:9', ratio: [16, 9] },
+];
+
+// normalizedAspect converts a preset into the width-to-height ratio the crop
+// overlay works in. A crop of w x h fractions covers w*imageWidth by
+// h*imageHeight pixels, so a wanted pixel ratio of pw:ph means
+// w/h = (pw/ph) * (imageHeight/imageWidth). Returns null when there is no
+// image to measure against yet, which leaves the crop unconstrained.
+export const normalizedAspect = (preset, imageWidth, imageHeight) => {
+    if (!imageWidth || !imageHeight) return null;
+    const found = ASPECT_PRESETS.find(p => p.value === preset);
+    if (!found) return null;
+    if (!found.ratio) return 1; // the photo's own shape, whatever that is
+    const [long, short] = found.ratio;
+    // A portrait photo takes every preset the tall way round, so "3:2" on a
+    // portrait shot crops to a 2:3 upright rather than turning it sideways.
+    const pixelRatio = imageHeight > imageWidth ? short / long : long / short;
+    return pixelRatio * (imageHeight / imageWidth);
+};
+
+// fitCropToAspect reshapes a crop to `aspect` without ever growing it, keeping
+// the centre where the user left it and nudging the result back inside frame.
+export const fitCropToAspect = (box, aspect) => {
+    if (!(aspect > 0)) return box;
+    const w = clamp01(Math.min(box.w, box.h * aspect));
+    const h = clamp01(w / aspect);
+    return {
+        x: clamp(box.x + (box.w - w) / 2, 0, 1 - w),
+        y: clamp(box.y + (box.h - h) / 2, 0, 1 - h),
+        w,
+        h,
+    };
+};
+
+// rectFromAnchor builds the crop for a drag from a fixed corner out to the
+// pointer. With an aspect locked the box follows whichever axis the pointer
+// reached furthest, then shrinks to the room left before the frame edge so a
+// drag into the corner stops at the ratio rather than breaking it.
+export const rectFromAnchor = (anchor, point, aspect) => {
+    if (!(aspect > 0)) return rectBetween(anchor, point);
+    const right = point.x >= anchor.x;
+    const down = point.y >= anchor.y;
+    const reach = Math.max(Math.abs(point.x - anchor.x), Math.abs(point.y - anchor.y) * aspect);
+    const room = Math.min(right ? 1 - anchor.x : anchor.x, (down ? 1 - anchor.y : anchor.y) * aspect);
+    const w = Math.max(0, Math.min(reach, room));
+    const h = w / aspect;
+    return {
+        x: right ? anchor.x : anchor.x - w,
+        y: down ? anchor.y : anchor.y - h,
+        w,
+        h,
+    };
+};
+
 // fitInside scales width x height down to fit the preview box, never up.
 const fitInside = (width, height) => {
     const scale = Math.min(1, PREVIEW_MAX_WIDTH / width, PREVIEW_MAX_HEIGHT / height);
@@ -61,6 +123,10 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
     const [crop, setCrop] = useState(null);
     const [image, setImage] = useState(null);
     const [loadFailed, setLoadFailed] = useState(false);
+    // The lock outlives a single photo on purpose: cropping a shoot to one
+    // shape only needs checking once, the way the gallery album stays picked.
+    const [aspectLock, setAspectLock] = useState(false);
+    const [aspectPreset, setAspectPreset] = useState('original');
 
     const canvasRef = useRef(null);
     const frameRef = useRef(null);
@@ -129,6 +195,16 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
         }
     }, [image, exposure, black]);
 
+    // Null whenever the lock is off or the photo hasn't loaded, which is the
+    // signal every crop helper below reads as "leave the shape alone".
+    const aspect = aspectLock
+        ? normalizedAspect(aspectPreset, image?.naturalWidth, image?.naturalHeight)
+        : null;
+
+    // Clearing a crop goes back to the full frame, or to the largest box the
+    // locked ratio allows so the overlay never contradicts the lock.
+    const clearedCrop = useCallback(() => (aspect ? fitCropToAspect(FULL_CROP, aspect) : null), [aspect]);
+
     const pointAt = useCallback((event) => {
         const frame = frameRef.current;
         if (!frame) return { x: 0, y: 0 };
@@ -156,14 +232,14 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                     h: drag.size.h,
                 });
             } else {
-                setCrop(rectBetween(drag.anchor, point));
+                setCrop(rectFromAnchor(drag.anchor, point, aspect));
             }
         };
         const handleUp = () => {
             if (!dragRef.current) return;
             dragRef.current = null;
             // A click rather than a drag means "no crop" — back to the full frame.
-            setCrop(current => (current && (current.w < MIN_CROP || current.h < MIN_CROP) ? null : current));
+            setCrop(current => (current && (current.w < MIN_CROP || current.h < MIN_CROP) ? clearedCrop() : current));
         };
         window.addEventListener('pointermove', handleMove);
         window.addEventListener('pointerup', handleUp);
@@ -171,7 +247,7 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
             window.removeEventListener('pointermove', handleMove);
             window.removeEventListener('pointerup', handleUp);
         };
-    }, [isOpen, pointAt]);
+    }, [isOpen, pointAt, aspect, clearedCrop]);
 
     useEffect(() => {
         if (!isOpen) return undefined;
@@ -211,6 +287,16 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
             dragRef.current = { mode: 'resize', anchor: point };
             setCrop({ x: point.x, y: point.y, w: 0, h: 0 });
         }
+    };
+
+    // Locking, or picking a different ratio, reshapes the crop right away so
+    // the box on screen always shows the shape every later drag will keep.
+    const applyAspect = (locked, preset) => {
+        setAspectLock(locked);
+        setAspectPreset(preset);
+        if (!locked) return;
+        const next = normalizedAspect(preset, image?.naturalWidth, image?.naturalHeight);
+        if (next) setCrop(current => fitCropToAspect(current || FULL_CROP, next));
     };
 
     if (!isOpen || !photoName) return null;
@@ -294,10 +380,33 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         <span className="edit-crop-summary">
                             Crop: {cropped ? cropLabel : 'full frame'}
                         </span>
+                        <div className="edit-aspect-controls">
+                            <label className="edit-aspect-lock" htmlFor="edit-aspect-lock">
+                                <input
+                                    id="edit-aspect-lock"
+                                    type="checkbox"
+                                    checked={aspectLock}
+                                    disabled={isBusy || !image}
+                                    onChange={(e) => applyAspect(e.target.checked, aspectPreset)}
+                                />
+                                Lock ratio
+                            </label>
+                            <select
+                                className="modal-input edit-aspect-select"
+                                aria-label="Crop aspect ratio"
+                                value={aspectPreset}
+                                disabled={isBusy || !image || !aspectLock}
+                                onChange={(e) => applyAspect(true, e.target.value)}
+                            >
+                                {ASPECT_PRESETS.map(preset => (
+                                    <option key={preset.value} value={preset.value}>{preset.label}</option>
+                                ))}
+                            </select>
+                        </div>
                         <button
                             type="button"
                             className="modal-button modal-button-cancel edit-reset-button"
-                            onClick={() => { setCrop(null); setExposure(0); setBlack(0); }}
+                            onClick={() => { setCrop(clearedCrop()); setExposure(0); setBlack(0); }}
                             disabled={isBusy}
                         >
                             Reset adjustments
@@ -305,7 +414,8 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                     </div>
                     <p className="modal-hint edit-hint">
                         Drag on the photo to draw a crop, drag inside it to move, or drag a corner to resize.
-                        Click once outside the box to clear it.
+                        Click once outside the box to clear it. Lock the ratio to hold every drag at the
+                        same shape — presets follow the photo, so 3:2 stays upright on a portrait shot.
                     </p>
                 </div>
 
