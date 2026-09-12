@@ -14,8 +14,11 @@ const DISPLAY_GAMMA = 2.2;
 const MAX_BLACK_SHIFT = 0.25;
 const MAX_HIGHLIGHT_KNEE = 0.5;
 const MAX_SKY_PULL = 2.0;
-const SKY_LUM_LOW = 0.45;
-const SKY_LUM_HIGH = 0.80;
+const SKY_PIVOT = 0.1762;
+const SKY_KNEE = 0.9;
+const MAX_SHADOW_KNEE = 0.5;
+const MAX_SHADOW_LIFT = 2.0;
+const MAX_WHITE_BALANCE = 1.0;
 const SKY_FEATHER = 0.25;
 const DEFAULT_HORIZON = 100;
 
@@ -60,11 +63,54 @@ export const applyHighlights = (v, h) => {
     return knee - span * Math.log(1 - t);
 };
 
-// skyLumWeight is the share of the sky pull a pixel of display brightness v
-// takes: nothing at or below middle grey, all of it once the pixel is as bright
-// as an overcast sky. That is what leaves the bird where the exposure slider put
-// it while the sky behind it comes down.
-export const skyLumWeight = (v) => smoothstep(SKY_LUM_LOW, SKY_LUM_HIGH, v);
+// applySkyPull scales linear light above a pivot down by `stops`, leaving
+// everything below the pivot where it was, with the slope change eased in over
+// a soft knee. Scaling above a pivot rather than weighting a multiply by
+// brightness is what keeps the curve monotone at every strength: a brighter
+// pixel can never come out darker than a dimmer one.
+export const applySkyPull = (l, stops) => {
+    if (stops <= 0) return l;
+    const gain = Math.pow(2, -stops);
+    const width = SKY_KNEE * SKY_PIVOT;
+    const x = (l - SKY_PIVOT) / width;
+    if (x <= -1) return l;
+    if (x >= 1) return SKY_PIVOT + (l - SKY_PIVOT) * gain;
+    return SKY_PIVOT + width * (x + (gain - 1) * (x + 1) * (x + 1) / 4);
+};
+
+// applyShadows opens up the bottom of the display range, leaving everything
+// above the knee exactly where it was. It pins both ends — black stays black and
+// the knee stays put — so it brightens what is dark without the milky wash a
+// raised black point gives, and the sky, far above the knee, cannot move.
+export const applyShadows = (v, s) => {
+    if (s <= 0 || v <= 0 || v >= MAX_SHADOW_KNEE) return v;
+    const t = v / MAX_SHADOW_KNEE;
+    return MAX_SHADOW_KNEE * (t + s * MAX_SHADOW_LIFT * t * (1 - t) * (1 - t));
+};
+
+// whiteBalanceGains turns the temperature and tint sliders into the linear-light
+// gain each colour channel takes. Temperature trades red against blue, the way
+// the light's colour actually shifts; tint moves green against the other two.
+export const whiteBalanceGains = (temperature, tint) => {
+    const t = clamp((temperature || 0) / 100, -1, 1) * MAX_WHITE_BALANCE;
+    const m = clamp((tint || 0) / 100, -1, 1) * MAX_WHITE_BALANCE;
+    return { r: Math.pow(2, t), g: Math.pow(2, -m), b: Math.pow(2, -t) };
+};
+
+// greyPointWhiteBalance solves for the temperature and tint that turn one
+// sampled colour neutral: pick the sky, which should be grey, and the cast goes.
+// With gains of 2^t on red, 2^-m on green and 2^-t on blue, making all three
+// channels equal in linear light is two equations in two unknowns.
+export const greyPointWhiteBalance = (r, g, b) => {
+    const lin = (c) => Math.pow(Math.max(1, c) / 255, DISPLAY_GAMMA);
+    const [lr, lg, lb] = [lin(r), lin(g), lin(b)];
+    const t = 0.5 * Math.log2(lb / lr);
+    const m = Math.log2(lr) + t - Math.log2(lg);
+    // The `|| 0` keeps a neutral sample from reporting -0, which would show up
+    // on the slider's readout as "-0" and ride along into the saved edit.
+    const toSlider = (stops) => Math.round(clamp(stops / MAX_WHITE_BALANCE, -1, 1) * 100) || 0;
+    return { temperature: toSlider(t), tint: toSlider(-m) };
+};
 
 // skyGradient is the share of the sky pull row y of an h-row frame takes: the
 // whole frame down to the horizon, then easing away over the feather band below
@@ -83,27 +129,50 @@ export const skyGradient = (y, height, horizon) => {
 // only ever darkens — brightening the sky is what the exposure slider is for.
 export const skyPullStops = (sky) => (sky > 0 ? (Math.min(sky, 100) / 100) * MAX_SKY_PULL : 0);
 
-// buildToneLUT maps each 8-bit channel value through the exposure shift, this
-// row's share of the sky pull, the highlight roll-off and the black point,
-// exactly as the backend does: exposure and the sky pull in linear light so they
-// behave like the aperture, highlights and the black point in display space
-// where they read as rolled-off highlights and deeper shadows. Nothing is
-// clamped until the end, which is what lets the shoulder pull a blown value back
-// under white.
-export const buildToneLUT = (exposure, black, highlights, skyPull) => {
-    const gain = Math.pow(2, exposure);
-    const h = clamp((highlights || 0) / 100, -1, 1);
+// shadowLift turns the slider into the fraction the lift curve works in. Like
+// the sky pull it only goes one way: deepening the shadows is the black point's
+// job, and giving one job to two sliders only makes them harder to predict.
+export const shadowLift = (shadows) => (shadows > 0 ? Math.min(shadows, 100) / 100 : 0);
+
+// buildToneLUT maps each 8-bit channel value through the white balance gain, the
+// exposure shift, this row's share of the sky pull, the highlight roll-off, the
+// shadow lift and the black point — exactly as the backend does. White balance,
+// exposure and the sky pull work in linear light so they behave like changing
+// the light or the aperture; highlights, shadows and the black point work in
+// display space where they read as rolled-off highlights, open shadows and
+// deeper blacks. Nothing is clamped until the end, which is what lets the
+// highlight shoulder pull a blown value back under white.
+//
+// The fields mirror the backend's toneParams one for one.
+export const buildToneLUT = ({ channelGain = 1, exposure = 0, skyPull = 0, highlights = 0, shadows = 0, black = 0 }) => {
+    const gain = Math.pow(2, exposure) * channelGain;
+    const h = clamp(highlights / 100, -1, 1);
     const b = clamp(black / 100, -1, 1) * MAX_BLACK_SHIFT;
     const lut = new Uint8ClampedArray(256);
     for (let i = 0; i < 256; i++) {
-        let v = Math.pow(i / 255, DISPLAY_GAMMA) * gain;
-        if (skyPull) {
-            v *= Math.pow(2, -skyPull * skyLumWeight(Math.pow(v, 1 / DISPLAY_GAMMA)));
-        }
-        v = applyHighlights(Math.pow(v, 1 / DISPLAY_GAMMA), h);
+        let v = applySkyPull(Math.pow(i / 255, DISPLAY_GAMMA) * gain, skyPull);
+        v = applyShadows(applyHighlights(Math.pow(v, 1 / DISPLAY_GAMMA), h), shadows);
         lut[i] = Math.round(clamp01((v - b) / (1 - b)) * 255);
     }
     return lut;
+};
+
+// buildRowLUTs renders the three channel curves one row of pixels goes through:
+// the same curve throughout, differing only in the white balance gain.
+export const buildRowLUTs = (settings, skyPull) => {
+    const gains = whiteBalanceGains(settings.temperature, settings.tint);
+    const base = {
+        exposure: settings.exposure,
+        skyPull,
+        highlights: settings.highlights,
+        shadows: shadowLift(settings.shadows),
+        black: settings.black,
+    };
+    return {
+        r: buildToneLUT({ ...base, channelGain: gains.r }),
+        g: buildToneLUT({ ...base, channelGain: gains.g }),
+        b: buildToneLUT({ ...base, channelGain: gains.b }),
+    };
 };
 
 // rectBetween builds a normalized crop from two corners in any order.
@@ -183,9 +252,12 @@ const fitInside = (width, height) => {
 };
 
 function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, initialEdit, isEdited, isBusy }) {
+    const [temperature, setTemperature] = useState(0);
+    const [tint, setTint] = useState(0);
     const [exposure, setExposure] = useState(0);
     const [black, setBlack] = useState(0);
     const [highlights, setHighlights] = useState(0);
+    const [shadows, setShadows] = useState(0);
     const [sky, setSky] = useState(0);
     const [horizon, setHorizon] = useState(DEFAULT_HORIZON_PERCENT);
     const [crop, setCrop] = useState(null);
@@ -196,9 +268,16 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
     const [aspectLock, setAspectLock] = useState(false);
     const [aspectPreset, setAspectPreset] = useState('original');
 
+    // Armed by the grey-point button; the next click on the photo samples
+    // instead of starting a crop.
+    const [picking, setPicking] = useState(false);
+
     const canvasRef = useRef(null);
     const frameRef = useRef(null);
     const dragRef = useRef(null);
+    // The photo as drawn, before any of the sliders touched it. The picker has
+    // to solve against the original colours, not the ones it is looking at.
+    const sourceFrameRef = useRef(null);
 
     // Edits always render from the pristine original, so the editor previews
     // that too — otherwise the sliders would stack on the last render.
@@ -209,9 +288,12 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
     // Opening the editor loads the saved adjustments back into the controls.
     useEffect(() => {
         if (!isOpen) return;
+        setTemperature(initialEdit?.temperature || 0);
+        setTint(initialEdit?.tint || 0);
         setExposure(initialEdit?.exposure || 0);
         setBlack(initialEdit?.black || 0);
         setHighlights(initialEdit?.highlights || 0);
+        setShadows(initialEdit?.shadows || 0);
         setSky(initialEdit?.sky || 0);
         setHorizon(initialEdit?.horizon || DEFAULT_HORIZON_PERCENT);
         setCrop(initialEdit?.crop || null);
@@ -232,7 +314,7 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
         return () => { cancelled = true; };
     }, [isOpen, sourceUrl]);
 
-    // Redraw whenever the image or the tone controls change.
+    // Redraw whenever the image or any of the controls change.
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas || !image) return;
@@ -249,44 +331,85 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
         if (!ctx) return;
 
         ctx.drawImage(image, 0, 0, width, height);
-        if (exposure === 0 && black === 0 && highlights === 0 && sky === 0) return;
         try {
             const frame = ctx.getImageData(0, 0, width, height);
-            const px = frame.data;
+            // Keep the untouched pixels for the grey-point picker, which has to
+            // solve against the photo's own colours rather than the preview's.
+            sourceFrameRef.current = frame;
+            if (exposure === 0 && black === 0 && highlights === 0 &&
+                shadows === 0 && sky === 0 && temperature === 0 && tint === 0) {
+                return;
+            }
+
+            const adjusted = ctx.createImageData(width, height);
+            const src = frame.data;
+            const px = adjusted.data;
             // The sky pull is the only adjustment that varies down the frame, so
-            // without one a single LUT covers the lot; with one each row gets
-            // its own, the way the backend walks the full-size photo.
-            // The gradient is flat above the horizon and gone below the feather,
-            // so only the rows inside the feather band need a LUT of their own.
+            // without one a single trio of LUTs covers the lot; with one each row
+            // gets its own, the way the backend walks the full-size photo. The
+            // gradient is flat above the horizon and gone below the feather, so
+            // only the rows inside the feather band need new ones.
+            const settings = { temperature, tint, exposure, black, highlights, shadows };
             const pull = skyPullStops(sky);
-            const base = buildToneLUT(exposure, black, highlights, 0);
+            const base = buildRowLUTs(settings, 0);
             let graded = base;
             let gradedFor = -1;
             for (let y = 0; y < height; y++) {
-                let lut = base;
+                let luts = base;
                 if (pull) {
                     const weight = skyGradient(y, height, horizon);
                     if (weight > 0) {
                         if (weight !== gradedFor) {
-                            graded = buildToneLUT(exposure, black, highlights, pull * weight);
+                            graded = buildRowLUTs(settings, pull * weight);
                             gradedFor = weight;
                         }
-                        lut = graded;
+                        luts = graded;
                     }
                 }
                 const end = (y + 1) * width * 4;
                 for (let i = y * width * 4; i < end; i += 4) {
-                    px[i] = lut[px[i]];
-                    px[i + 1] = lut[px[i + 1]];
-                    px[i + 2] = lut[px[i + 2]];
+                    px[i] = luts.r[src[i]];
+                    px[i + 1] = luts.g[src[i + 1]];
+                    px[i + 2] = luts.b[src[i + 2]];
+                    px[i + 3] = src[i + 3];
                 }
             }
-            ctx.putImageData(frame, 0, 0);
+            ctx.putImageData(adjusted, 0, 0);
         } catch (e) {
             // A tainted canvas can't be read back; the preview then shows the
             // photo unadjusted rather than nothing at all.
+            sourceFrameRef.current = null;
         }
-    }, [image, exposure, black, highlights, sky, horizon]);
+    }, [image, temperature, tint, exposure, black, highlights, shadows, sky, horizon]);
+
+    // sampleGrey reads a small patch of the untouched photo around a point and
+    // sets the white balance that turns it neutral. A patch rather than a single
+    // pixel so sensor noise in a smooth sky cannot swing the answer.
+    const sampleGrey = useCallback((point) => {
+        const frame = sourceFrameRef.current;
+        const canvas = canvasRef.current;
+        if (!frame || !canvas) return false;
+        const { width, height } = frame;
+        const cx = Math.round(point.x * (width - 1));
+        const cy = Math.round(point.y * (height - 1));
+
+        const radius = 2;
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let y = Math.max(0, cy - radius); y <= Math.min(height - 1, cy + radius); y++) {
+            for (let x = Math.max(0, cx - radius); x <= Math.min(width - 1, cx + radius); x++) {
+                const i = (y * width + x) * 4;
+                r += frame.data[i];
+                g += frame.data[i + 1];
+                b += frame.data[i + 2];
+                n++;
+            }
+        }
+        if (!n) return false;
+        const wb = greyPointWhiteBalance(r / n, g / n, b / n);
+        setTemperature(wb.temperature);
+        setTint(wb.tint);
+        return true;
+    }, []);
 
     // Null whenever the lock is off or the photo hasn't loaded, which is the
     // signal every crop helper below reads as "leave the shape alone".
@@ -345,19 +468,32 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
     useEffect(() => {
         if (!isOpen) return undefined;
         const handleKey = (event) => {
-            if (event.key === 'Escape' && !isBusy) {
+            if (event.key !== 'Escape' || isBusy) return;
+            // Escape backs out of the picker first, the editor second.
+            if (picking) {
+                setPicking(false);
+            } else {
                 onClose();
             }
         };
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [isOpen, isBusy, onClose]);
+    }, [isOpen, isBusy, onClose, picking]);
 
     const handlePointerDown = (event) => {
         if (isBusy || !image) return;
         event.preventDefault();
-        const handle = event.target.dataset && event.target.dataset.handle;
         const point = pointAt(event);
+
+        // While the picker is armed a click sets the white balance instead of
+        // starting a crop, then puts the pointer back to cropping.
+        if (picking) {
+            sampleGrey(point);
+            setPicking(false);
+            return;
+        }
+
+        const handle = event.target.dataset && event.target.dataset.handle;
         const current = crop || FULL_CROP;
 
         if (handle) {
@@ -402,7 +538,7 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
 
     const apply = () => {
         if (isBusy) return;
-        onApply({ crop: cropped ? box : null, exposure, black, highlights, sky, horizon });
+        onApply({ crop: cropped ? box : null, temperature, tint, exposure, black, highlights, shadows, sky, horizon });
     };
 
     return (
@@ -415,7 +551,7 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         <p className="edit-preview-message">Could not load this photo for editing.</p>
                     ) : (
                         <div
-                            className="edit-canvas-frame"
+                            className={`edit-canvas-frame ${picking ? 'picking' : ''}`}
                             ref={frameRef}
                             onPointerDown={handlePointerDown}
                         >
@@ -450,6 +586,49 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                 </div>
 
                 <div className="edit-controls">
+                    <div className="edit-group-row">
+                        <h3 className="edit-group-title">Colour</h3>
+                        <button
+                            type="button"
+                            className={`modal-button modal-button-cancel edit-picker-button ${picking ? 'armed' : ''}`}
+                            onClick={() => setPicking(p => !p)}
+                            disabled={isBusy || !image}
+                            aria-pressed={picking}
+                            title="Click something in the photo that should be neutral grey — an overcast sky does nicely"
+                        >
+                            {picking ? 'Click a grey…' : 'Pick grey'}
+                        </button>
+                    </div>
+                    <div className="edit-slider-row">
+                        <label htmlFor="edit-temperature">Temperature</label>
+                        <input
+                            id="edit-temperature"
+                            type="range"
+                            min="-100"
+                            max="100"
+                            step="1"
+                            value={temperature}
+                            disabled={isBusy}
+                            onChange={(e) => setTemperature(parseInt(e.target.value, 10))}
+                        />
+                        <span className="edit-slider-value">{temperature > 0 ? '+' : ''}{temperature}</span>
+                    </div>
+                    <div className="edit-slider-row">
+                        <label htmlFor="edit-tint">Tint</label>
+                        <input
+                            id="edit-tint"
+                            type="range"
+                            min="-100"
+                            max="100"
+                            step="1"
+                            value={tint}
+                            disabled={isBusy}
+                            onChange={(e) => setTint(parseInt(e.target.value, 10))}
+                        />
+                        <span className="edit-slider-value">{tint > 0 ? '+' : ''}{tint}</span>
+                    </div>
+
+                    <h3 className="edit-group-title">Tone</h3>
                     <div className="edit-slider-row">
                         <label htmlFor="edit-exposure">Exposure</label>
                         <input
@@ -491,6 +670,20 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                             onChange={(e) => setHighlights(parseInt(e.target.value, 10))}
                         />
                         <span className="edit-slider-value">{highlights > 0 ? '+' : ''}{highlights}</span>
+                    </div>
+                    <div className="edit-slider-row">
+                        <label htmlFor="edit-shadows">Shadows</label>
+                        <input
+                            id="edit-shadows"
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={shadows}
+                            disabled={isBusy}
+                            onChange={(e) => setShadows(parseInt(e.target.value, 10))}
+                        />
+                        <span className="edit-slider-value">{shadows === 0 ? 'off' : `+${shadows}`}</span>
                     </div>
                     <div className="edit-slider-row">
                         <label htmlFor="edit-sky">Sky</label>
@@ -552,11 +745,15 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                             className="modal-button modal-button-cancel edit-reset-button"
                             onClick={() => {
                                 setCrop(clearedCrop());
+                                setTemperature(0);
+                                setTint(0);
                                 setExposure(0);
                                 setBlack(0);
                                 setHighlights(0);
+                                setShadows(0);
                                 setSky(0);
                                 setHorizon(DEFAULT_HORIZON_PERCENT);
+                                setPicking(false);
                             }}
                             disabled={isBusy}
                         >
@@ -564,14 +761,18 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         </button>
                     </div>
                     <p className="modal-hint edit-hint">
-                        Lifting <strong>Exposure</strong> for the bird blows the sky out; the next two
-                        sliders put it back. <strong>Highlights</strong> rolls the top of the range off
-                        everywhere, which stops the sky clipping and costs the bird nothing.
-                        <strong> Sky</strong> then takes up to two stops off the sky itself — only off
-                        what is already brighter than a midtone, so a dark bird in the frame stays put.
-                        It covers the whole frame until you drop the <strong>Horizon</strong>, which keeps
-                        the pull off everything below the line. A bird as pale as the sky cannot be told
-                        apart by brightness, so reach for Highlights alone on those.
+                        For a bird against a bright sky, reach for <strong>Shadows</strong> before
+                        Exposure: it opens the bird up and cannot touch the sky at all, where raising
+                        Exposure lifts both and blows the sky white. If the sky is already gone,
+                        <strong> Highlights</strong> rolls the top of the range off to stop it clipping,
+                        and <strong>Sky</strong> takes up to two stops off the sky itself, leaving the
+                        darker half of the frame where it was. Sky covers the whole photo until you drop
+                        the <strong>Horizon</strong>, which keeps the pull off everything below the line.
+                    </p>
+                    <p className="modal-hint edit-hint">
+                        <strong>Pick grey</strong> sets Temperature and Tint from one click: choose
+                        something in the photo that ought to be neutral — an overcast sky, a pale
+                        branch — and the cast comes off the whole frame.
                     </p>
                     <p className="modal-hint edit-hint">
                         Drag on the photo to draw a crop, drag inside it to move, or drag a corner to resize.

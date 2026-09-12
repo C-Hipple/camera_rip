@@ -58,15 +58,15 @@ func decodeBytes(t *testing.T, data []byte) image.Image {
 }
 
 func TestBuildToneLUT(t *testing.T) {
-	identity := buildToneLUT(0, 0, 0, 0)
+	identity := buildToneLUT(toneParams{channelGain: 1})
 	for i := range identity {
 		if int(identity[i]) != i {
 			t.Fatalf("neutral LUT changed %d to %d", i, identity[i])
 		}
 	}
 
-	brighter := buildToneLUT(1, 0, 0, 0)
-	darker := buildToneLUT(-1, 0, 0, 0)
+	brighter := buildToneLUT(toneParams{channelGain: 1, exposure: 1})
+	darker := buildToneLUT(toneParams{channelGain: 1, exposure: -1})
 	if brighter[128] <= 128 {
 		t.Errorf("+1 stop mapped 128 to %d, want brighter", brighter[128])
 	}
@@ -80,8 +80,8 @@ func TestBuildToneLUT(t *testing.T) {
 		t.Errorf("+1 stop mapped white to %d, want 255", brighter[255])
 	}
 
-	crushed := buildToneLUT(0, 100, 0, 0)
-	lifted := buildToneLUT(0, -100, 0, 0)
+	crushed := buildToneLUT(toneParams{channelGain: 1, black: 100})
+	lifted := buildToneLUT(toneParams{channelGain: 1, black: -100})
 	if crushed[40] != 0 {
 		t.Errorf("black level +100 mapped 40 to %d, want the shadows crushed to 0", crushed[40])
 	}
@@ -98,38 +98,42 @@ func TestBuildToneLUT(t *testing.T) {
 // file cannot drift apart.
 func TestToneLUTReferenceValues(t *testing.T) {
 	tests := []struct {
-		exposure   float64
-		black      float64
-		highlights float64
-		skyPull    float64
-		input      int
-		want       uint8
+		params toneParams
+		input  int
+		want   uint8
 	}{
-		{1, 0, 0, 0, 128, 175},
-		{-1, 0, 0, 0, 128, 93},
-		{0, 50, 0, 0, 128, 110},
-		{0, -50, 0, 0, 0, 28},
-		{0.5, 25, 0, 0, 200, 233},
-		{1, 0, 0, 0, 64, 88},
+		{toneParams{channelGain: 1, exposure: 1}, 128, 175},
+		{toneParams{channelGain: 1, exposure: -1}, 128, 93},
+		{toneParams{channelGain: 1, black: 50}, 128, 110},
+		{toneParams{channelGain: 1, black: -50}, 0, 28},
+		{toneParams{channelGain: 1, exposure: 0.5, black: 25}, 200, 233},
+		{toneParams{channelGain: 1, exposure: 1}, 64, 88},
 		// Highlight recovery: a bright value rolls down, and pure white with it.
-		{0, 0, -100, 0, 200, 183},
-		{0, 0, -100, 0, 255, 208},
+		{toneParams{channelGain: 1, highlights: -100}, 200, 183},
+		{toneParams{channelGain: 1, highlights: -100}, 255, 208},
 		// The pair the bird case turns on — +1.5 stops clips 200 to white, and
 		// the shoulder brings it back under with room to spare.
-		{1.5, 0, 0, 0, 200, 255},
-		{1.5, 0, -80, 0, 200, 235},
+		{toneParams{channelGain: 1, exposure: 1.5}, 200, 255},
+		{toneParams{channelGain: 1, exposure: 1.5, highlights: -80}, 200, 235},
 		// A sky pull darkens what is already bright and ignores what is not.
-		{0, 0, 0, 1, 230, 168},
-		{0, 0, 0, 2, 230, 122},
-		{0, 0, 0, 2, 60, 60},
-		// And all four together, the way the sky-balance preset stacks them.
-		{1.5, 0, -60, 1.2, 210, 216},
+		{toneParams{channelGain: 1, skyPull: 1}, 230, 184},
+		{toneParams{channelGain: 1, skyPull: 2}, 230, 154},
+		{toneParams{channelGain: 1, skyPull: 2}, 60, 60},
+		// The shadow lift is the mirror: it moves a dark value a long way and
+		// leaves a bright one exactly alone.
+		{toneParams{channelGain: 1, shadows: 1}, 51, 88},
+		{toneParams{channelGain: 1, shadows: 0.5}, 51, 69},
+		{toneParams{channelGain: 1, shadows: 1}, 200, 200},
+		// A white balance gain is a per-channel exposure, so it lands where the
+		// same number of stops on the exposure slider would.
+		{toneParams{channelGain: 2}, 128, 175},
+		{toneParams{channelGain: 0.5}, 128, 93},
+		// And everything at once, the way the sliders stack them.
+		{toneParams{channelGain: 1, exposure: 1.5, highlights: -60, skyPull: 1.2}, 210, 222},
 	}
 	for _, tt := range tests {
-		got := buildToneLUT(tt.exposure, tt.black, tt.highlights, tt.skyPull)[tt.input]
-		if got != tt.want {
-			t.Errorf("buildToneLUT(%v, %v, %v, %v)[%d] = %d, want %d",
-				tt.exposure, tt.black, tt.highlights, tt.skyPull, tt.input, got, tt.want)
+		if got := buildToneLUT(tt.params)[tt.input]; got != tt.want {
+			t.Errorf("buildToneLUT(%+v)[%d] = %d, want %d", tt.params, tt.input, got, tt.want)
 		}
 	}
 }
@@ -183,7 +187,7 @@ func TestApplyHighlights(t *testing.T) {
 // exposure enough to see the bird flattens the top of the range to white, and
 // the highlight slider has to put the steps back.
 func TestHighlightRecoveryUnclipsTheSky(t *testing.T) {
-	lifted := buildToneLUT(1.5, 0, 0, 0)
+	lifted := buildToneLUT(toneParams{channelGain: 1, exposure: 1.5})
 	if lifted[190] != 255 || lifted[255] != 255 {
 		t.Fatalf("+1.5 stops gave %d..%d for 190..255, want both clipped to white", lifted[190], lifted[255])
 	}
@@ -191,7 +195,7 @@ func TestHighlightRecoveryUnclipsTheSky(t *testing.T) {
 	// The shoulder turns that plateau back into a ramp. It is a compressed one —
 	// sixty-odd inputs sharing a dozen-odd 8-bit outputs — but a sky that rises
 	// instead of sitting flat at white is the difference being asked for.
-	recovered := buildToneLUT(1.5, 0, -80, 0)
+	recovered := buildToneLUT(toneParams{channelGain: 1, exposure: 1.5, highlights: -80})
 	if recovered[255] >= 255 {
 		t.Errorf("recovered white = %d, want it under 255 so the sky holds detail", recovered[255])
 	}
@@ -214,28 +218,6 @@ func TestHighlightRecoveryUnclipsTheSky(t *testing.T) {
 	if recovered[90] != lifted[90] {
 		t.Errorf("recovery moved midtone 90 from %d to %d, want the bird left bright",
 			lifted[90], recovered[90])
-	}
-}
-
-func TestSkyLumWeight(t *testing.T) {
-	if got := skyLumWeight(skyLumLow); got != 0 {
-		t.Errorf("skyLumWeight(%v) = %v, want nothing below the low end", skyLumLow, got)
-	}
-	if got := skyLumWeight(skyLumHigh); got != 1 {
-		t.Errorf("skyLumWeight(%v) = %v, want the full pull above the high end", skyLumHigh, got)
-	}
-	// A bird reads as a midtone or darker against the sky, so it takes little
-	// or none of the pull while the sky above it takes all of it.
-	if bird, sky := skyLumWeight(0.3), skyLumWeight(0.92); bird != 0 || sky != 1 {
-		t.Errorf("weights bird = %v, sky = %v, want 0 and 1", bird, sky)
-	}
-	prev := -1.0
-	for v := 0.0; v <= 1.0001; v += 0.05 {
-		got := skyLumWeight(v)
-		if got < prev {
-			t.Fatalf("skyLumWeight(%v) = %v, want it never to fall back", v, got)
-		}
-		prev = got
 	}
 }
 
@@ -309,8 +291,13 @@ func TestSkyPullAndHorizonFromSlider(t *testing.T) {
 	if !(photoEdit{Sky: 0, Horizon: 40}).isIdentity() {
 		t.Error("a horizon with no pull behind it should count as no edit")
 	}
-	if (photoEdit{Sky: 40}).isIdentity() || (photoEdit{Highlights: -40}).isIdentity() {
-		t.Error("a sky pull or a highlight roll-off should count as an edit")
+	if (photoEdit{Sky: 40}).isIdentity() || (photoEdit{Highlights: -40}).isIdentity() ||
+		(photoEdit{Shadows: 40}).isIdentity() || (photoEdit{Temperature: 5}).isIdentity() ||
+		(photoEdit{Tint: -5}).isIdentity() {
+		t.Error("any of the tone or colour sliders should count as an edit")
+	}
+	if !(photoEdit{Shadows: -10}).isIdentity() {
+		t.Error("the shadow slider only lifts, so a negative value is no edit")
 	}
 }
 
@@ -369,12 +356,21 @@ func TestRenderEditBalancesTheSky(t *testing.T) {
 	if sky := greyAt(t, out, 2, 2); sky >= 250 || sky <= 128 {
 		t.Errorf("balanced sky = %d, want it off the clipping point but still sky", sky)
 	}
-	// The bird keeps the exposure it was lifted to: it is darker than the sky,
-	// so the pull skips it even though it sits inside the gradient.
+	// The bird keeps very nearly the exposure it was lifted to: it sits at the
+	// bottom of the sky pull's knee, so it takes a sliver of the pull where the
+	// sky above it takes all of it. Shadows is the slider with the bit-exact
+	// promise; this one only has to leave the bird where the eye left it.
 	bird := greyAt(t, out, 20, 6)
 	birdLifted := greyAt(t, decodeBytes(t, lifted), 20, 6)
-	if bird != birdLifted {
-		t.Errorf("bird = %d, want the %d the exposure lift gave it", bird, birdLifted)
+	if d := birdLifted - bird; d < 0 || d > 8 {
+		t.Errorf("bird = %d against the %d the exposure lift gave it, want it within a few levels",
+			bird, birdLifted)
+	}
+	// Which only means anything next to what the sky gave up.
+	skyGaveUp := greyAt(t, decodeBytes(t, lifted), 2, 2) - greyAt(t, out, 2, 2)
+	if skyGaveUp < 4*(birdLifted-bird) {
+		t.Errorf("the sky gave up %d and the bird %d, want the pull landing on the sky",
+			skyGaveUp, birdLifted-bird)
 	}
 	if bird <= 70 {
 		t.Errorf("bird = %d, want it brighter than the %d it started at", bird, 70)
@@ -673,7 +669,8 @@ func TestEditPhotoHandlerBacksUpOriginalAndRecordsEdit(t *testing.T) {
 
 	w := postJSON(t, editPhotoHandler, "/api/edit-photo",
 		`{"directory":"`+directory+`","photo":"100_IMG_0001.png","crop":{"x":0,"y":0,"w":0.5,"h":1},`+
-			`"exposure":0.5,"black":10,"highlights":-40,"sky":65,"horizon":35}`)
+			`"exposure":0.5,"black":10,"highlights":-40,"shadows":55,"sky":65,"horizon":35,`+
+			`"temperature":12,"tint":-8}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("edit returned %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -709,8 +706,11 @@ func TestEditPhotoHandlerBacksUpOriginalAndRecordsEdit(t *testing.T) {
 	if got.Exposure != 0.5 || got.Black != 10 || got.Crop == nil || got.Crop.W != 0.5 {
 		t.Errorf("edit record = %+v, want the submitted adjustments", got)
 	}
-	if got.Highlights != -40 || got.Sky != 65 || got.Horizon != 35 {
-		t.Errorf("edit record = %+v, want the sky settings recorded too", got)
+	if got.Highlights != -40 || got.Sky != 65 || got.Horizon != 35 || got.Shadows != 55 {
+		t.Errorf("edit record = %+v, want the tone settings recorded too", got)
+	}
+	if got.Temperature != 12 || got.Tint != -8 {
+		t.Errorf("edit record = %+v, want the white balance recorded too", got)
 	}
 	if got.EditedAt == "" {
 		t.Error("edit record has no timestamp")
@@ -831,6 +831,10 @@ func TestEditPhotoHandlerRejectsBadRequests(t *testing.T) {
 		{"highlights out of range", `{"directory":"` + directory + `","photo":"shot.png","highlights":160}`},
 		{"sky below zero", `{"directory":"` + directory + `","photo":"shot.png","sky":-10}`},
 		{"horizon past the frame", `{"directory":"` + directory + `","photo":"shot.png","sky":50,"horizon":140}`},
+		{"shadows below zero", `{"directory":"` + directory + `","photo":"shot.png","shadows":-20}`},
+		{"shadows out of range", `{"directory":"` + directory + `","photo":"shot.png","shadows":250}`},
+		{"temperature out of range", `{"directory":"` + directory + `","photo":"shot.png","temperature":-300}`},
+		{"tint out of range", `{"directory":"` + directory + `","photo":"shot.png","tint":120}`},
 	}
 	for _, tt := range tests {
 		if w := postJSON(t, editPhotoHandler, "/api/edit-photo", tt.body); w.Code != http.StatusBadRequest {

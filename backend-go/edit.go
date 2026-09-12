@@ -1,7 +1,7 @@
 package main
 
-// Non-destructive photo editing: crop, exposure, black level, highlight
-// recovery and a graduated sky pull.
+// Non-destructive photo editing: crop, white balance, exposure, black level,
+// highlight recovery, shadow lift and a graduated sky pull.
 //
 // The pristine original is copied into an "unedited" subfolder of the session
 // the first time a photo is edited, and every render starts from that copy, so
@@ -52,15 +52,33 @@ const (
 	// strength. Two is enough to bring a white sky back to a readable blue.
 	maxSkyPull = 2.0
 
-	// Display brightness over which the sky pull fades in. The low end sits at
-	// middle grey, so nothing the eye reads as a midtone or darker is touched at
-	// all, and the high end at an overcast sky, which takes the pull in full.
-	// That is what keeps a bird in the frame where the exposure slider put it
-	// while the sky behind it comes down. A bird as pale as the sky it is flying
-	// against cannot be told apart by brightness; the gradient is what limits
-	// the pull then.
-	skyLumLow  = 0.45
-	skyLumHigh = 0.80
+	// Linear-light level the sky pull compresses towards — middle grey in display
+	// terms (0.45^displayGamma). Deep shadows come through untouched and a
+	// midtone very nearly so, which is what keeps a bird roughly where the
+	// exposure slider put it while the sky behind it comes down. It is a soft
+	// promise, not the bit-exact one applyShadows makes; and a bird as pale as
+	// the sky it is flying against cannot be told apart this way at all, where
+	// the gradient is the only thing limiting the pull.
+	skyPivot = 0.1762
+
+	// Half-width of the sky pull's soft knee, as a fraction of the pivot. The
+	// slope change eases in across it rather than arriving as a contour line.
+	skyKnee = 0.9
+
+	// How far up the display range the shadow lift reaches, and what it adds to
+	// the slope at black at full strength. The knee is fixed and only the amount
+	// follows the slider, so the slider's travel maps evenly onto how much a
+	// given dark pixel moves. It sits at or below every highlight knee, so the
+	// two curves can meet but never overlap and their order does not matter.
+	// The slope stays positive for any lift below 3, so 2 leaves room: the curve
+	// can never double back on itself.
+	maxShadowKnee = 0.5
+	maxShadowLift = 2.0
+
+	// Stops each white balance slider moves its channels at ±100. A stop each
+	// way is far more than an outdoor cast needs — the sample below wants about
+	// a tenth of one — but it means the grey-point picker is never clamped.
+	maxWhiteBalance = 1.0
 
 	// How far down the frame the sky pull reaches, as a percentage of frame
 	// height, when a record carries a pull but no horizon of its own. A bird is
@@ -94,22 +112,37 @@ type cropRect struct {
 
 // photoEdit is the full set of adjustments applied to one photo.
 type photoEdit struct {
-	Crop       *cropRect `json:"crop,omitempty"`
-	Exposure   float64   `json:"exposure"`   // stops, negative darkens
-	Black      float64   `json:"black"`      // -100 lifts shadows, +100 crushes them
-	Highlights float64   `json:"highlights"` // -100 rolls highlights off, +100 pushes them up
-	Sky        float64   `json:"sky"`        // 0-100, how hard the top of the frame is pulled down
-	Horizon    float64   `json:"horizon"`    // 0-100, how far down the frame the sky pull reaches
-	EditedAt   string    `json:"edited_at,omitempty"`
+	Crop        *cropRect `json:"crop,omitempty"`
+	Temperature float64   `json:"temperature"` // -100 cools the photo, +100 warms it
+	Tint        float64   `json:"tint"`        // -100 towards green, +100 towards magenta
+	Exposure    float64   `json:"exposure"`    // stops, negative darkens
+	Black       float64   `json:"black"`       // -100 lifts shadows, +100 crushes them
+	Highlights  float64   `json:"highlights"`  // -100 rolls highlights off, +100 pushes them up
+	Shadows     float64   `json:"shadows"`     // 0-100, how far the shadows are opened up
+	Sky         float64   `json:"sky"`         // 0-100, how hard the top of the frame is pulled down
+	Horizon     float64   `json:"horizon"`     // 0-100, how far down the frame the sky pull reaches
+	EditedAt    string    `json:"edited_at,omitempty"`
 }
 
 // isIdentity reports whether the edit would leave the photo unchanged, in
 // which case applying it is treated as a revert instead of a re-encode.
 func (e photoEdit) isIdentity() bool {
-	if e.Exposure != 0 || e.Black != 0 || e.Highlights != 0 || e.skyPullStops() != 0 {
+	if e.Exposure != 0 || e.Black != 0 || e.Highlights != 0 ||
+		e.Temperature != 0 || e.Tint != 0 ||
+		e.shadowLift() != 0 || e.skyPullStops() != 0 {
 		return false
 	}
 	return e.Crop == nil || e.Crop.isFull()
+}
+
+// shadowLift is the shadow slider as the fraction the curve works in. Like the
+// sky pull it only goes one way: deepening the shadows is what the black point
+// is for, and giving one job to two sliders only makes them harder to predict.
+func (e photoEdit) shadowLift() float64 {
+	if e.Shadows <= 0 {
+		return 0
+	}
+	return math.Min(e.Shadows, 100) / 100
 }
 
 // skyPullStops is how many stops of exposure the sky slider takes off the top
@@ -210,12 +243,62 @@ func applyHighlights(v, h float64) float64 {
 	return knee - span*math.Log(1-t)
 }
 
-// skyLumWeight is the share of the sky pull a pixel of display brightness v
-// takes. The sky is the brightest thing in the top of a bird frame, so
-// weighting the pull by brightness takes the glare off it while leaving the
-// bird — darker than the sky it is flying against — where it was.
-func skyLumWeight(v float64) float64 {
-	return smoothstep(skyLumLow, skyLumHigh, v)
+// applySkyPull scales linear light above a pivot down by `stops`, leaving
+// everything below the pivot exactly where it was, with the slope change eased
+// in over a soft knee so it never draws a contour across a smooth sky.
+//
+// Scaling the region above the pivot, rather than weighting a multiply by how
+// bright the pixel is, is what makes the curve monotone at every strength: the
+// slope only ever moves between 2^-stops and 1, both positive, so a brighter
+// pixel can never come out darker than a dimmer one. A brightness-weighted
+// multiply cannot promise that — past about 1.2 stops its gain falls faster
+// than the value rises and the sky's own gradient comes out inverted.
+func applySkyPull(l, stops float64) float64 {
+	if stops <= 0 {
+		return l
+	}
+	gain := math.Pow(2, -stops)
+	width := skyKnee * skyPivot
+	x := (l - skyPivot) / width
+	if x <= -1 {
+		return l
+	}
+	if x >= 1 {
+		return skyPivot + (l-skyPivot)*gain
+	}
+	// Across the knee the slope ramps from 1 to gain; this is that ramp's
+	// integral, so the curve stays continuous and its slope never reaches zero.
+	return skyPivot + width*(x+(gain-1)*(x+1)*(x+1)/4)
+}
+
+// applyShadows opens up the bottom of the display range, leaving everything
+// above the knee exactly where it was. s is the slider over 0..1.
+//
+// The curve pins both ends — black stays black and the knee stays put — so it
+// brightens what is dark without the milky wash that lifting the black point
+// would give, and the sky, which lives far above the knee, is untouched by
+// construction rather than by a mask that might let some through. It meets the
+// knee at slope 1, so there is no kink where it takes over, and its slope stays
+// positive for any lift under 3.
+func applyShadows(v, s float64) float64 {
+	if s <= 0 || v <= 0 {
+		return v
+	}
+	if v >= maxShadowKnee {
+		return v
+	}
+	t := v / maxShadowKnee
+	return maxShadowKnee * (t + s*maxShadowLift*t*(1-t)*(1-t))
+}
+
+// whiteBalanceGains turns the temperature and tint sliders into the linear-light
+// gain each colour channel takes. Temperature trades red against blue, the way
+// the light's colour actually shifts between overcast and evening; tint moves
+// green against the other two, which is the axis left over.
+func whiteBalanceGains(temperature, tint float64) (r, g, b float64) {
+	t := math.Max(-1, math.Min(1, temperature/100)) * maxWhiteBalance
+	m := math.Max(-1, math.Min(1, tint/100)) * maxWhiteBalance
+	return math.Pow(2, t), math.Pow(2, -m), math.Pow(2, -t)
 }
 
 // skyGradient is the share of the sky pull that row y of an h-row frame takes:
@@ -234,35 +317,64 @@ func skyGradient(y, height int, horizon float64) float64 {
 	return 1 - smoothstep(edge, edge+skyFeather, (float64(y)+0.5)/float64(height))
 }
 
-// buildToneLUT maps every 8-bit channel value through the exposure shift, the
-// sky pull, the highlight roll-off and finally the black-point move.
+// toneParams is one channel's worth of the tone pass: everything a single LUT
+// needs to bake in. skyPull is the row's share of the graduated pull, in stops,
+// and channelGain is that channel's white balance gain — the only field that
+// differs between the three LUTs a row is rendered with.
+type toneParams struct {
+	channelGain float64
+	exposure    float64
+	skyPull     float64
+	highlights  float64
+	shadows     float64
+	black       float64
+}
+
+// buildToneLUT maps every 8-bit channel value through the white balance gain,
+// the exposure shift, the sky pull, the highlight roll-off, the shadow lift and
+// finally the black-point move.
 //
-// Exposure and the sky pull are applied in linear light (hence the gamma round
-// trip) so they behave like opening or closing the aperture rather than washing
-// the frame out evenly; skyPull is this row's share of the gradient, in stops,
-// and is zero everywhere below the horizon. Highlights and the black point then
-// work in display space, where they match what the eye reads as "rolled-off
-// highlights" and "deeper blacks": v' = (v - b) / (1 - b) pulls b down to zero
-// and stretches what is left.
+// White balance, exposure and the sky pull are applied in linear light (hence
+// the gamma round trip) so they behave like changing the light or the aperture
+// rather than washing the frame out evenly. Highlights, shadows and the black
+// point then work in display space, where they match what the eye reads as
+// rolled-off highlights, open shadows and deeper blacks: v' = (v - b) / (1 - b)
+// pulls b down to zero and stretches what is left.
+//
+// Highlights and shadows bend opposite ends of the range and their knees can
+// meet but never overlap, so the order between them does not matter.
 //
 // Nothing is clamped until the very end, which is what lets the highlight
 // shoulder pull a value the exposure lift pushed past white back under it.
-func buildToneLUT(exposure, black, highlights, skyPull float64) [256]uint8 {
-	gain := math.Pow(2, exposure)
-	h := math.Max(-1, math.Min(1, highlights/100))
-	b := math.Max(-1, math.Min(1, black/100)) * maxBlackShift
+func buildToneLUT(p toneParams) [256]uint8 {
+	gain := math.Pow(2, p.exposure) * p.channelGain
+	h := math.Max(-1, math.Min(1, p.highlights/100))
+	b := math.Max(-1, math.Min(1, p.black/100)) * maxBlackShift
 
 	var lut [256]uint8
 	for i := range lut {
-		v := math.Pow(float64(i)/255, displayGamma) * gain
-		if skyPull != 0 {
-			v *= math.Pow(2, -skyPull*skyLumWeight(math.Pow(v, 1/displayGamma)))
-		}
-		v = applyHighlights(math.Pow(v, 1/displayGamma), h)
+		v := applySkyPull(math.Pow(float64(i)/255, displayGamma)*gain, p.skyPull)
+		v = applyShadows(applyHighlights(math.Pow(v, 1/displayGamma), h), p.shadows)
 		v = (v - b) / (1 - b)
 		lut[i] = uint8(math.Round(clamp01(v) * 255))
 	}
 	return lut
+}
+
+// channelParams builds the three LUT parameter sets a row is rendered with: the
+// same curve throughout, differing only in the white balance gain.
+func (e photoEdit) channelParams(skyPull float64) (r, g, b toneParams) {
+	rGain, gGain, bGain := whiteBalanceGains(e.Temperature, e.Tint)
+	base := toneParams{
+		exposure:   e.Exposure,
+		skyPull:    skyPull,
+		highlights: e.Highlights,
+		shadows:    e.shadowLift(),
+		black:      e.Black,
+	}
+	r, g, b = base, base, base
+	r.channelGain, g.channelGain, b.channelGain = rGain, gGain, bGain
+	return r, g, b
 }
 
 // toRGBA returns src as an *image.RGBA anchored at the origin, reusing the
@@ -277,46 +389,56 @@ func toRGBA(src image.Image) *image.RGBA {
 	return dst
 }
 
+// rowLUTs is the trio of LUTs one row of pixels is pushed through — one per
+// colour channel, so white balance can move them against each other.
+type rowLUTs struct{ r, g, b [256]uint8 }
+
 // applyToneLUT rewrites the colour channels of one row in place. Alpha is left
 // alone so a transparent PNG keeps its transparency.
-func applyToneLUT(row []uint8, lut *[256]uint8) {
+func applyToneLUT(row []uint8, luts *rowLUTs) {
 	for i := 0; i+3 < len(row); i += 4 {
-		row[i] = lut[row[i]]
-		row[i+1] = lut[row[i+1]]
-		row[i+2] = lut[row[i+2]]
+		row[i] = luts.r[row[i]]
+		row[i+1] = luts.g[row[i+1]]
+		row[i+2] = luts.b[row[i+2]]
 	}
 }
 
-// applyTone runs the whole tone pass over img in place. Exposure, highlights
-// and the black point are the same everywhere, so on their own a single LUT
-// does the entire frame; a sky pull varies down the frame instead, so each row
-// takes a LUT built at that row's share of the gradient. Giving every row its
-// own rather than interpolating between a handful keeps the sky free of the
-// banding a coarse gradient would leave across it — and since the gradient is
-// flat above the horizon and gone below the feather, only the rows inside the
-// feather band actually need a new one.
+// buildRowLUTs renders the three channel curves for one row of the frame.
+func buildRowLUTs(edit photoEdit, skyPull float64) rowLUTs {
+	r, g, b := edit.channelParams(skyPull)
+	return rowLUTs{r: buildToneLUT(r), g: buildToneLUT(g), b: buildToneLUT(b)}
+}
+
+// applyTone runs the whole tone pass over img in place. Everything but the sky
+// pull is the same the whole way down the frame, so on their own one trio of
+// LUTs does the lot; a sky pull varies by row instead, so each row takes LUTs
+// built at that row's share of the gradient. Giving every row its own rather
+// than interpolating between a handful keeps the sky free of the banding a
+// coarse gradient would leave across it — and since the gradient is flat above
+// the horizon and gone below the feather, only the rows inside the feather band
+// actually need new ones.
 func applyTone(img *image.RGBA, edit photoEdit) {
 	bounds := img.Bounds()
 	pull := edit.skyPullStops()
 	horizon := edit.horizonPercent()
 
-	base := buildToneLUT(edit.Exposure, edit.Black, edit.Highlights, 0)
-	var graded [256]uint8
+	base := buildRowLUTs(edit, 0)
+	graded := base
 	gradedFor := -1.0 // the weight `graded` was built at; no weight is negative
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		lut := &base
+		luts := &base
 		if pull != 0 {
 			weight := skyGradient(y-bounds.Min.Y, bounds.Dy(), horizon)
 			if weight > 0 {
 				if weight != gradedFor {
-					graded = buildToneLUT(edit.Exposure, edit.Black, edit.Highlights, pull*weight)
+					graded = buildRowLUTs(edit, pull*weight)
 					gradedFor = weight
 				}
-				lut = &graded
+				luts = &graded
 			}
 		}
 		start := img.PixOffset(bounds.Min.X, y)
-		applyToneLUT(img.Pix[start:start+bounds.Dx()*4], lut)
+		applyToneLUT(img.Pix[start:start+bounds.Dx()*4], luts)
 	}
 }
 
@@ -709,14 +831,17 @@ func editPhotoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Directory  string    `json:"directory"`
-		Photo      string    `json:"photo"`
-		Crop       *cropRect `json:"crop"`
-		Exposure   float64   `json:"exposure"`
-		Black      float64   `json:"black"`
-		Highlights float64   `json:"highlights"`
-		Sky        float64   `json:"sky"`
-		Horizon    float64   `json:"horizon"`
+		Directory   string    `json:"directory"`
+		Photo       string    `json:"photo"`
+		Crop        *cropRect `json:"crop"`
+		Temperature float64   `json:"temperature"`
+		Tint        float64   `json:"tint"`
+		Exposure    float64   `json:"exposure"`
+		Black       float64   `json:"black"`
+		Highlights  float64   `json:"highlights"`
+		Shadows     float64   `json:"shadows"`
+		Sky         float64   `json:"sky"`
+		Horizon     float64   `json:"horizon"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
@@ -738,22 +863,27 @@ func editPhotoHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "Invalid crop rectangle")
 		return
 	}
-	if math.Abs(req.Exposure) > 5 || math.Abs(req.Black) > 100 || math.Abs(req.Highlights) > 100 {
+	if math.Abs(req.Exposure) > 5 || math.Abs(req.Black) > 100 || math.Abs(req.Highlights) > 100 ||
+		math.Abs(req.Temperature) > 100 || math.Abs(req.Tint) > 100 {
 		writeJSONError(w, http.StatusBadRequest, "Adjustment out of range")
 		return
 	}
-	if req.Sky < 0 || req.Sky > 100 || req.Horizon < 0 || req.Horizon > 100 {
-		writeJSONError(w, http.StatusBadRequest, "Sky adjustment out of range")
+	if req.Shadows < 0 || req.Shadows > 100 ||
+		req.Sky < 0 || req.Sky > 100 || req.Horizon < 0 || req.Horizon > 100 {
+		writeJSONError(w, http.StatusBadRequest, "Shadow or sky adjustment out of range")
 		return
 	}
 
 	edit := photoEdit{
-		Crop:       req.Crop,
-		Exposure:   req.Exposure,
-		Black:      req.Black,
-		Highlights: req.Highlights,
-		Sky:        req.Sky,
-		Horizon:    req.Horizon,
+		Crop:        req.Crop,
+		Temperature: req.Temperature,
+		Tint:        req.Tint,
+		Exposure:    req.Exposure,
+		Black:       req.Black,
+		Highlights:  req.Highlights,
+		Shadows:     req.Shadows,
+		Sky:         req.Sky,
+		Horizon:     req.Horizon,
 	}
 	if edit.isIdentity() {
 		// Nothing to apply — restore the original rather than re-encoding it.

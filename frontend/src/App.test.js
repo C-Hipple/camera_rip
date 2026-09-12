@@ -279,25 +279,46 @@ test('the editor posts the slider values and flags the photo as edited', async (
   fireEvent.change(await screen.findByLabelText(/Exposure/i), { target: { value: '0.5' } });
   fireEvent.change(screen.getByLabelText(/Black level/i), { target: { value: '20' } });
   fireEvent.change(screen.getByLabelText(/Highlights/i), { target: { value: '-60' } });
+  fireEvent.change(screen.getByLabelText(/Shadows/i), { target: { value: '45' } });
   fireEvent.change(screen.getByLabelText(/^Sky$/i), { target: { value: '70' } });
   fireEvent.change(screen.getByLabelText(/Horizon/i), { target: { value: '40' } });
+  fireEvent.change(screen.getByLabelText(/Temperature/i), { target: { value: '12' } });
+  fireEvent.change(screen.getByLabelText(/Tint/i), { target: { value: '-8' } });
   fireEvent.click(screen.getByRole('button', { name: /Apply Edit/i }));
 
   await waitFor(() => expect(postedTo('/api/edit-photo')).toEqual({
     directory: 'session-1',
     photo: '100_IMG_0001.JPG',
     crop: null,
+    temperature: 12,
+    tint: -8,
     exposure: 0.5,
     black: 20,
     highlights: -60,
+    shadows: 45,
     sky: 70,
     horizon: 40,
   }));
 
   // A successful edit closes the modal and marks the photo everywhere it appears
   await waitFor(() => expect(screen.queryByLabelText(/Black level/i)).not.toBeInTheDocument());
+
   expect(await screen.findByText('EDITED')).toBeInTheDocument();
   expect(container.querySelectorAll('.carousel-thumbnail.edited').length).toBeGreaterThan(0);
+});
+
+test('the editor offers a grey-point picker, idle until the photo has loaded', async () => {
+  mockApi({ photos: ['100_IMG_0001.JPG'] });
+  render(<App />);
+  await screen.findByRole('option', { name: /All Images \(1\)/i });
+
+  fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
+  const picker = await screen.findByRole('button', { name: /Pick grey/i });
+  expect(picker).toHaveAttribute('aria-pressed', 'false');
+  // There is nothing to sample until the preview has the photo, so the button
+  // waits rather than arming onto an empty canvas.
+  expect(picker).toBeDisabled();
+  expect(screen.getByLabelText(/Temperature/i)).toBeInTheDocument();
 });
 
 test('an edited photo can be compared against its backed-up original', async () => {

@@ -1,5 +1,6 @@
 import {
-  buildToneLUT, applyHighlights, skyLumWeight, skyGradient, skyPullStops,
+  buildToneLUT, applyHighlights, applySkyPull, applyShadows,
+  whiteBalanceGains, greyPointWhiteBalance, skyGradient, skyPullStops, shadowLift,
   normalizedAspect, fitCropToAspect, rectFromAnchor,
 } from './EditModal';
 
@@ -8,51 +9,82 @@ import {
 // ever drift, one of these suites goes red.
 test('the preview tone curve matches the backend reference values', () => {
   const cases = [
-    { exposure: 1, black: 0, highlights: 0, skyPull: 0, input: 128, want: 175 },
-    { exposure: -1, black: 0, highlights: 0, skyPull: 0, input: 128, want: 93 },
-    { exposure: 0, black: 50, highlights: 0, skyPull: 0, input: 128, want: 110 },
-    { exposure: 0, black: -50, highlights: 0, skyPull: 0, input: 0, want: 28 },
-    { exposure: 0.5, black: 25, highlights: 0, skyPull: 0, input: 200, want: 233 },
-    { exposure: 1, black: 0, highlights: 0, skyPull: 0, input: 64, want: 88 },
+    { params: { exposure: 1 }, input: 128, want: 175 },
+    { params: { exposure: -1 }, input: 128, want: 93 },
+    { params: { black: 50 }, input: 128, want: 110 },
+    { params: { black: -50 }, input: 0, want: 28 },
+    { params: { exposure: 0.5, black: 25 }, input: 200, want: 233 },
+    { params: { exposure: 1 }, input: 64, want: 88 },
     // Highlight recovery: a bright value rolls down, and pure white with it.
-    { exposure: 0, black: 0, highlights: -100, skyPull: 0, input: 200, want: 183 },
-    { exposure: 0, black: 0, highlights: -100, skyPull: 0, input: 255, want: 208 },
+    { params: { highlights: -100 }, input: 200, want: 183 },
+    { params: { highlights: -100 }, input: 255, want: 208 },
     // The pair the bird case turns on — +1.5 stops clips 200 to white, and the
     // shoulder brings it back under with room to spare.
-    { exposure: 1.5, black: 0, highlights: 0, skyPull: 0, input: 200, want: 255 },
-    { exposure: 1.5, black: 0, highlights: -80, skyPull: 0, input: 200, want: 235 },
+    { params: { exposure: 1.5 }, input: 200, want: 255 },
+    { params: { exposure: 1.5, highlights: -80 }, input: 200, want: 235 },
     // A sky pull darkens what is already bright and ignores what is not.
-    { exposure: 0, black: 0, highlights: 0, skyPull: 1, input: 230, want: 168 },
-    { exposure: 0, black: 0, highlights: 0, skyPull: 2, input: 230, want: 122 },
-    { exposure: 0, black: 0, highlights: 0, skyPull: 2, input: 60, want: 60 },
-    // And all four together, the way the sky-balance sliders stack them.
-    { exposure: 1.5, black: 0, highlights: -60, skyPull: 1.2, input: 210, want: 216 },
+    { params: { skyPull: 1 }, input: 230, want: 184 },
+    { params: { skyPull: 2 }, input: 230, want: 154 },
+    { params: { skyPull: 2 }, input: 60, want: 60 },
+    // The shadow lift is the mirror: it moves a dark value a long way and
+    // leaves a bright one exactly alone.
+    { params: { shadows: 1 }, input: 51, want: 88 },
+    { params: { shadows: 0.5 }, input: 51, want: 69 },
+    { params: { shadows: 1 }, input: 200, want: 200 },
+    // A white balance gain is a per-channel exposure, so it lands where the
+    // same number of stops on the exposure slider would.
+    { params: { channelGain: 2 }, input: 128, want: 175 },
+    { params: { channelGain: 0.5 }, input: 128, want: 93 },
+    // And everything at once, the way the sliders stack them.
+    { params: { exposure: 1.5, highlights: -60, skyPull: 1.2 }, input: 210, want: 222 },
   ];
-  cases.forEach(({ exposure, black, highlights, skyPull, input, want }) => {
-    expect(buildToneLUT(exposure, black, highlights, skyPull)[input]).toBe(want);
+  cases.forEach(({ params, input, want }) => {
+    expect(buildToneLUT(params)[input]).toBe(want);
   });
 });
 
 test('neutral settings leave every value untouched', () => {
-  const lut = buildToneLUT(0, 0, 0, 0);
+  const lut = buildToneLUT({});
   for (let i = 0; i < 256; i++) {
     expect(lut[i]).toBe(i);
   }
 });
 
+// The curve doubling back would render a bright patch darker than a dim one —
+// a sky with its own gradient running backwards. The backend sweeps the same
+// grid in TestToneCurveIsMonotone.
+test('the curve never doubles back, whatever the sliders say', () => {
+  [0, 1, 2].forEach(skyPull => {
+    [-2, 0, 1.5].forEach(exposure => {
+      [-100, 0, 100].forEach(highlights => {
+        [0, 1].forEach(shadows => {
+          [-100, 0, 100].forEach(black => {
+            [0.5, 1, 2].forEach(channelGain => {
+              const lut = buildToneLUT({ channelGain, exposure, skyPull, highlights, shadows, black });
+              for (let i = 0; i < 255; i++) {
+                expect(lut[i + 1]).toBeGreaterThanOrEqual(lut[i]);
+              }
+            });
+          });
+        });
+      });
+    });
+  });
+});
+
 test('the black level moves the shadows and leaves white alone', () => {
-  expect(buildToneLUT(0, 100, 0, 0)[255]).toBe(255);
-  expect(buildToneLUT(0, -100, 0, 0)[255]).toBe(255);
-  expect(buildToneLUT(0, 100, 0, 0)[40]).toBe(0);
-  expect(buildToneLUT(0, -100, 0, 0)[0]).toBeGreaterThan(0);
+  expect(buildToneLUT({ black: 100 })[255]).toBe(255);
+  expect(buildToneLUT({ black: -100 })[255]).toBe(255);
+  expect(buildToneLUT({ black: 100 })[40]).toBe(0);
+  expect(buildToneLUT({ black: -100 })[0]).toBeGreaterThan(0);
 });
 
 test('raising exposure brightens without blowing out white or lifting black', () => {
-  const brighter = buildToneLUT(1, 0, 0, 0);
+  const brighter = buildToneLUT({ exposure: 1 });
   expect(brighter[128]).toBeGreaterThan(128);
   expect(brighter[255]).toBe(255);
   expect(brighter[0]).toBe(0);
-  expect(buildToneLUT(-1, 0, 0, 0)[128]).toBeLessThan(128);
+  expect(buildToneLUT({ exposure: -1 })[128]).toBeLessThan(128);
 });
 
 // The sky tools exist for one shot: the exposure is up for the bird and the sky
@@ -80,27 +112,30 @@ describe('the sky balance tools', () => {
   });
 
   test('recovery turns a clipped sky back into a rising ramp', () => {
-    const lifted = buildToneLUT(1.5, 0, 0, 0);
+    const lifted = buildToneLUT({ exposure: 1.5 });
     expect(lifted[190]).toBe(255);
     expect(lifted[255]).toBe(255);
 
-    const recovered = buildToneLUT(1.5, 0, -80, 0);
+    const recovered = buildToneLUT({ exposure: 1.5, highlights: -80 });
     expect(recovered[255]).toBeLessThan(255);
     expect(recovered[255]).toBeGreaterThan(recovered[190]);
     // And the bird, down in the midtones, keeps the exposure it was given.
     expect(recovered[90]).toBe(lifted[90]);
   });
 
-  test('the pull only reaches what is brighter than a midtone', () => {
-    expect(skyLumWeight(0.3)).toBe(0);
-    expect(skyLumWeight(0.45)).toBe(0);
-    expect(skyLumWeight(0.8)).toBe(1);
-    expect(skyLumWeight(0.92)).toBe(1);
+  test('the pull leaves the shadows alone and scales what is bright', () => {
+    // Below the knee — which opens at SKY_PIVOT * (1 - SKY_KNEE) — nothing moves.
+    expect(applySkyPull(0.01, 2)).toBe(0.01);
+    expect(applySkyPull(0, 2)).toBe(0);
+    expect(applySkyPull(0.8, 0)).toBe(0.8);
+    // Well above the knee it is exactly the scale it promises.
+    expect(applySkyPull(0.9, 2)).toBeCloseTo(0.1762 + (0.9 - 0.1762) / 4, 12);
+    expect(applySkyPull(0.9, 2)).toBeLessThan(applySkyPull(0.9, 1));
 
     let previous = -1;
-    for (let v = 0; v <= 1.0001; v += 0.05) {
-      const got = skyLumWeight(v);
-      expect(got).toBeGreaterThanOrEqual(previous);
+    for (let l = 0; l <= 2; l += 0.002) {
+      const got = applySkyPull(l, 2);
+      expect(got).toBeGreaterThan(previous);
       previous = got;
     }
   });
@@ -131,6 +166,82 @@ describe('the sky balance tools', () => {
     expect(skyPullStops(50)).toBeCloseTo(1, 10);
     expect(skyPullStops(100)).toBeCloseTo(2, 10);
     expect(skyPullStops(200)).toBeCloseTo(2, 10);
+  });
+});
+
+// The shadow lift is the other half: it brightens the bird and, unlike the sky
+// pull's soft promise, it cannot reach the sky at all.
+describe('the shadow lift', () => {
+  test('it pins black and everything above the knee', () => {
+    expect(applyShadows(0, 1)).toBe(0);
+    [0.5, 0.8, 1.0, 1.4].forEach(v => expect(applyShadows(v, 1)).toBe(v));
+    expect(applyShadows(0.2, 0)).toBe(0.2);
+
+    // In between it brightens, and further the harder it is pushed.
+    expect(applyShadows(0.2, 0.5)).toBeGreaterThan(0.2);
+    expect(applyShadows(0.2, 1)).toBeGreaterThan(applyShadows(0.2, 0.5));
+
+    // It meets the knee at slope 1, so there is no kink where it takes over.
+    expect((0.5 - applyShadows(0.5 - 1e-7, 1)) / 1e-7).toBeCloseTo(1, 3);
+  });
+
+  test('it lifts the bird and leaves the sky bit for bit', () => {
+    const plain = buildToneLUT({});
+    const lifted = buildToneLUT({ shadows: 1 });
+    // The values measured off the sample photo: bird's back 51, sky 249.
+    expect(lifted[51]).toBeGreaterThan(plain[51] + 20);
+    for (let i = 128; i < 256; i++) {
+      expect(lifted[i]).toBe(plain[i]);
+    }
+  });
+
+  test('the slider only ever lifts', () => {
+    expect(shadowLift(0)).toBe(0);
+    expect(shadowLift(-40)).toBe(0);
+    expect(shadowLift(50)).toBe(0.5);
+    expect(shadowLift(250)).toBe(1);
+  });
+});
+
+describe('white balance', () => {
+  test('temperature trades red against blue and tint moves green alone', () => {
+    expect(whiteBalanceGains(0, 0)).toEqual({ r: 1, g: 1, b: 1 });
+
+    const warm = whiteBalanceGains(100, 0);
+    expect(warm.r).toBeGreaterThan(1);
+    expect(warm.b).toBeLessThan(1);
+    expect(warm.g).toBe(1);
+
+    const cool = whiteBalanceGains(-100, 0);
+    expect(cool.r).toBeCloseTo(warm.b, 12);
+    expect(cool.b).toBeCloseTo(warm.r, 12);
+
+    const magenta = whiteBalanceGains(0, 100);
+    expect(magenta.g).toBeLessThan(1);
+    expect(magenta.r).toBe(1);
+    expect(magenta.b).toBe(1);
+    expect(whiteBalanceGains(0, -100).g).toBeGreaterThan(1);
+
+    // The sliders are clamped, not wrapped.
+    expect(whiteBalanceGains(400, 0).r).toBe(whiteBalanceGains(100, 0).r);
+  });
+
+  test('the picker turns the colour it sampled neutral', () => {
+    // The cyan cast measured off the sample photo's sky.
+    const { temperature, tint } = greyPointWhiteBalance(237, 254, 255);
+    expect(temperature).toBeGreaterThan(0); // cyan wants warming
+    expect(Math.abs(temperature)).toBeLessThanOrEqual(100);
+    expect(Math.abs(tint)).toBeLessThanOrEqual(100);
+
+    // Push the sampled colour back through the curve the sliders describe.
+    const gains = whiteBalanceGains(temperature, tint);
+    const out = ['r', 'g', 'b'].map((ch, i) =>
+      buildToneLUT({ channelGain: gains[ch] })[[237, 254, 255][i]]);
+    expect(Math.max(...out) - Math.min(...out)).toBeLessThanOrEqual(1);
+  });
+
+  test('something already neutral asks for no correction', () => {
+    expect(greyPointWhiteBalance(180, 180, 180)).toEqual({ temperature: 0, tint: 0 });
   });
 });
 
