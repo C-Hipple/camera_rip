@@ -1,0 +1,74 @@
+/* The "?" itself: quiet until it is worth looking at, then Gruvbox yellow like
+   every other live control in the modals. */
+.help-tip {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 1px solid #665c54;
+    /* Gruvbox Gray */
+    border-radius: 50%;
+    background-color: transparent;
+    color: #a89984;
+    font-family: inherit;
+    font-size: 0.7rem;
+    font-weight: bold;
+    line-height: 1;
+    cursor: help;
+}
+
+.help-tip:hover,
+.help-tip:focus-visible,
+.help-tip.open {
+    border-color: #d79921;
+    /* Gruvbox Yellow */
+    color: #d79921;
+}
+
+/* The bubble opens upward because the controls stack downward: there is always
+   a row above the one being asked about, and on the last row there is nothing
+   below. Its box is the row's (the button is left unpositioned on purpose), so
+   the 100% it is capped at is the width the row already fits into. */
+.help-tip-bubble {
+    box-sizing: border-box;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    z-index: 10;
+    width: max-content;
+    max-width: min(360px, 100%);
+    padding: 8px 10px;
+    border: 1px solid #7c6f64;
+    border-radius: 4px;
+    background-color: #1d2021;
+    /* Gruvbox Dark Hard */
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+    color: #ebdbb2;
+    /* Gruvbox Light */
+    font-size: 0.8rem;
+    font-weight: normal;
+    line-height: 1.5;
+    text-align: left;
+    white-space: normal;
+    /* Read, never clicked: the bubble lies across rows that still want the
+       pointer, and a slider under it has to stay draggable. */
+    pointer-events: none;
+}
+
+.help-tip-bubble.left {
+    left: 0;
+}
+
+/* For a tip on the right-hand end of a row, where a left-anchored bubble would
+   open away from the thing it explains. */
+.help-tip-bubble.right {
+    right: 0;
+}
+
+.help-tip-bubble strong {
+    color: #d79921;
+    /* Gruvbox Yellow */
+}

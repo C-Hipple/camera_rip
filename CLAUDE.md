@@ -44,7 +44,8 @@ cd frontend && npx react-scripts test --watchAll=false  # Frontend tests
 - `frontend/src/ConfirmModal.js` — Reusable confirmation dialog
 - `frontend/src/RenameModal.js` — Single-field prompt for renaming a session folder
 - `frontend/src/GalleryUploadModal.js` — Title/hashtag form and album dropdown shown before a gallery upload
-- `frontend/src/EditModal.js` — Crop overlay (with an optional aspect ratio lock), the white balance pair with its grey-point picker, and the exposure/black/highlights/shadows/sky sliders, with a canvas preview that runs the same tone curve as the backend
+- `frontend/src/EditModal.js` — Crop overlay (with an optional aspect ratio lock), the white balance pair with its grey-point picker, and the exposure/black/highlights/shadows/sky sliders, with a canvas preview that runs the same tone curve as the backend, and a `HelpTip` on every control whose copy lives in the exported `EDIT_HELP` table
+- `frontend/src/HelpTip.js` — The "?" beside a control: a bubble on hover, focus or tap, positioned against the row rather than the button so it can never spill out of the modal sideways
 
 **Build pipeline:** React build output is copied into `backend-go/frontend/` and embedded into the Go binary via `//go:embed all:frontend/build`. The Makefile orchestrates this.
 
