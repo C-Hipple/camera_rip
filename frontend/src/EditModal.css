@@ -146,6 +146,7 @@
 /* The first group puts the picker on the heading's line, so the button sits
    with the two sliders it drives rather than adrift among all of them. */
 .edit-group-row {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -155,6 +156,14 @@
 
 .edit-group-row .edit-group-title {
     margin: 0;
+}
+
+/* A heading, or the picker button, and the "?" that explains it — one item as
+   far as the row's space-between layout is concerned. */
+.edit-group-heading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .edit-picker-button {
@@ -174,24 +183,32 @@
     cursor: crosshair;
 }
 
-/* Tone follows Colour, so its heading needs the air the first one gets above. */
-.edit-controls .edit-group-title:not(:first-child) {
+/* Tone follows the last Colour slider, and needs the air the first heading
+   gets above it. */
+.edit-slider-row + .edit-group-row {
     margin-top: 16px;
 }
 
 .edit-slider-row {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 12px;
     margin-bottom: 10px;
 }
 
+.edit-slider-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 128px;
+    flex-shrink: 0;
+}
+
 .edit-slider-row label {
     color: #ebdbb2;
     /* Gruvbox Light */
     font-size: 0.9rem;
-    width: 110px;
-    flex-shrink: 0;
 }
 
 .edit-slider-row input[type="range"] {
@@ -290,8 +307,11 @@ select.edit-aspect-select {
         padding: 16px;
     }
 
+    .edit-slider-label {
+        width: 104px;
+    }
+
     .edit-slider-row label {
-        width: 90px;
         font-size: 0.85rem;
     }
 

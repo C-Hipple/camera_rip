@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import HelpTip from './HelpTip';
 import './ConfirmModal.css';
 import './EditModal.css';
 
@@ -249,6 +250,102 @@ export const rectFromAnchor = (anchor, point, aspect) => {
 const fitInside = (width, height) => {
     const scale = Math.min(1, PREVIEW_MAX_WIDTH / width, PREVIEW_MAX_HEIGHT / height);
     return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+};
+
+// What each control is for, shown by the "?" beside it. Written for someone who
+// knows what they want the photo to look like but not what the sliders are
+// called elsewhere, so each one says when to reach for it, not just what it
+// moves. Exported so the tests can hold every control to having an answer.
+export const EDIT_HELP = {
+    colour: (
+        <>
+            White balance: what this photo counts as white. The camera guesses it from the
+            scene and often misses, leaving the whole frame faintly orange, blue or green.
+            <strong> Pick grey</strong> corrects it in one click; Temperature and Tint are
+            the same correction by hand.
+        </>
+    ),
+    pickGrey: (
+        <>
+            The one-click fix for a colour cast. Press it, then click anything in the photo
+            that ought to be neutral grey or white — a paving stone, a white shirt in the
+            shade, an overcast sky, weathered wood. Temperature and Tint jump to whatever
+            makes that spot neutral, and the cast lifts off the whole frame with it.
+            Avoid anything blown out to white, nearly black, or lit by a coloured light;
+            if the result overshoots, click a different spot or nudge the two sliders after.
+        </>
+    ),
+    temperature: (
+        <>
+            The blue-to-orange half of white balance. Right (+) adds orange, for a grey shot
+            that wants some sun in it; left (−) adds blue, for a photo that came out too
+            orange under indoor light. Judge it on something you know the colour of — skin,
+            snow, a white wall — or let <strong>Pick grey</strong> set it and nudge from there.
+        </>
+    ),
+    tint: (
+        <>
+            The green-to-magenta half of white balance, and the one most photos never need.
+            Right (+) adds magenta, left (−) adds green. Reach for it only when Temperature
+            alone cannot clear a cast: fluorescent and cheap LED light leave a green tinge
+            that shows up first on skin and on anything grey.
+        </>
+    ),
+    tone: (
+        <>
+            How bright the photo is and how that brightness is shared out. Exposure moves the
+            whole frame at once; the four below it move one end of the range and leave the
+            other where it was.
+        </>
+    ),
+    exposure: (
+        <>
+            Overall brightness, in stops: +1 is twice the light, −1 is half. Use it when the
+            whole photo is too dark or too bright. It lifts everything together, so a bright
+            sky is what gives out first — if it is only the subject that is too dark, use
+            <strong> Shadows</strong> instead.
+        </>
+    ),
+    black: (
+        <>
+            Where the darkest tones sit. Right (+) drives them down to a true black for more
+            contrast and punch; left (−) lifts them for a softer, hazier, faded look. Small
+            moves go a long way here — ±20 is plenty on most photos.
+        </>
+    ),
+    highlights: (
+        <>
+            The bright end only. Left (−) rolls the top of the range back down under white,
+            recovering a sky or a pale wing that has gone flat white; right (+) pushes the
+            bright tones up. It is the one tool that still helps when the subject is nearly
+            as pale as the sky behind it.
+        </>
+    ),
+    shadows: (
+        <>
+            Opens up the dark parts and nothing else — the first thing to try for a bird, or
+            a face, against a bright sky. It brightens what is below the midtones and cannot
+            touch what is above them, so the sky comes through exactly as shot, where
+            <strong> Exposure</strong> would lift it to white along with the subject.
+        </>
+    ),
+    sky: (
+        <>
+            Takes up to two stops off the brightest part of the frame and leaves the darker
+            half where it is — for a sky that is bright but still has something in it. If the
+            sky has already gone pure white there is nothing left to pull down, and
+            <strong> Highlights</strong> is the tool instead. The pull covers the whole photo
+            until you bring the Horizon down.
+        </>
+    ),
+    horizon: (
+        <>
+            Where the Sky pull stops. At <em>whole frame</em> it applies evenly everywhere;
+            drag it down and a dashed line appears on the preview — everything below the line
+            is left alone, and the pull fades out across it so there is no visible seam. Does
+            nothing until Sky is above zero.
+        </>
+    ),
 };
 
 function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, initialEdit, isEdited, isBusy }) {
@@ -587,20 +684,28 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
 
                 <div className="edit-controls">
                     <div className="edit-group-row">
-                        <h3 className="edit-group-title">Colour</h3>
-                        <button
-                            type="button"
-                            className={`modal-button modal-button-cancel edit-picker-button ${picking ? 'armed' : ''}`}
-                            onClick={() => setPicking(p => !p)}
-                            disabled={isBusy || !image}
-                            aria-pressed={picking}
-                            title="Click something in the photo that should be neutral grey — an overcast sky does nicely"
-                        >
-                            {picking ? 'Click a grey…' : 'Pick grey'}
-                        </button>
+                        <div className="edit-group-heading">
+                            <h3 className="edit-group-title">Colour</h3>
+                            <HelpTip label="white balance">{EDIT_HELP.colour}</HelpTip>
+                        </div>
+                        <div className="edit-group-heading">
+                            <button
+                                type="button"
+                                className={`modal-button modal-button-cancel edit-picker-button ${picking ? 'armed' : ''}`}
+                                onClick={() => setPicking(p => !p)}
+                                disabled={isBusy || !image}
+                                aria-pressed={picking}
+                            >
+                                {picking ? 'Click a grey…' : 'Pick grey'}
+                            </button>
+                            <HelpTip label="the grey point picker" align="right">{EDIT_HELP.pickGrey}</HelpTip>
+                        </div>
                     </div>
                     <div className="edit-slider-row">
-                        <label htmlFor="edit-temperature">Temperature</label>
+                        <span className="edit-slider-label">
+                            <label htmlFor="edit-temperature">Temperature</label>
+                            <HelpTip label="Temperature">{EDIT_HELP.temperature}</HelpTip>
+                        </span>
                         <input
                             id="edit-temperature"
                             type="range"
@@ -614,7 +719,10 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         <span className="edit-slider-value">{temperature > 0 ? '+' : ''}{temperature}</span>
                     </div>
                     <div className="edit-slider-row">
-                        <label htmlFor="edit-tint">Tint</label>
+                        <span className="edit-slider-label">
+                            <label htmlFor="edit-tint">Tint</label>
+                            <HelpTip label="Tint">{EDIT_HELP.tint}</HelpTip>
+                        </span>
                         <input
                             id="edit-tint"
                             type="range"
@@ -628,9 +736,17 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         <span className="edit-slider-value">{tint > 0 ? '+' : ''}{tint}</span>
                     </div>
 
-                    <h3 className="edit-group-title">Tone</h3>
+                    <div className="edit-group-row">
+                        <div className="edit-group-heading">
+                            <h3 className="edit-group-title">Tone</h3>
+                            <HelpTip label="the tone controls">{EDIT_HELP.tone}</HelpTip>
+                        </div>
+                    </div>
                     <div className="edit-slider-row">
-                        <label htmlFor="edit-exposure">Exposure</label>
+                        <span className="edit-slider-label">
+                            <label htmlFor="edit-exposure">Exposure</label>
+                            <HelpTip label="Exposure">{EDIT_HELP.exposure}</HelpTip>
+                        </span>
                         <input
                             id="edit-exposure"
                             type="range"
@@ -644,7 +760,10 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         <span className="edit-slider-value">{exposure > 0 ? '+' : ''}{exposure.toFixed(2)} EV</span>
                     </div>
                     <div className="edit-slider-row">
-                        <label htmlFor="edit-black">Black level</label>
+                        <span className="edit-slider-label">
+                            <label htmlFor="edit-black">Black level</label>
+                            <HelpTip label="Black level">{EDIT_HELP.black}</HelpTip>
+                        </span>
                         <input
                             id="edit-black"
                             type="range"
@@ -658,7 +777,10 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         <span className="edit-slider-value">{black > 0 ? '+' : ''}{black}</span>
                     </div>
                     <div className="edit-slider-row">
-                        <label htmlFor="edit-highlights">Highlights</label>
+                        <span className="edit-slider-label">
+                            <label htmlFor="edit-highlights">Highlights</label>
+                            <HelpTip label="Highlights">{EDIT_HELP.highlights}</HelpTip>
+                        </span>
                         <input
                             id="edit-highlights"
                             type="range"
@@ -672,7 +794,10 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         <span className="edit-slider-value">{highlights > 0 ? '+' : ''}{highlights}</span>
                     </div>
                     <div className="edit-slider-row">
-                        <label htmlFor="edit-shadows">Shadows</label>
+                        <span className="edit-slider-label">
+                            <label htmlFor="edit-shadows">Shadows</label>
+                            <HelpTip label="Shadows">{EDIT_HELP.shadows}</HelpTip>
+                        </span>
                         <input
                             id="edit-shadows"
                             type="range"
@@ -686,7 +811,10 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         <span className="edit-slider-value">{shadows === 0 ? 'off' : `+${shadows}`}</span>
                     </div>
                     <div className="edit-slider-row">
-                        <label htmlFor="edit-sky">Sky</label>
+                        <span className="edit-slider-label">
+                            <label htmlFor="edit-sky">Sky</label>
+                            <HelpTip label="Sky">{EDIT_HELP.sky}</HelpTip>
+                        </span>
                         <input
                             id="edit-sky"
                             type="range"
@@ -700,7 +828,10 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         <span className="edit-slider-value">{sky === 0 ? 'off' : `-${skyPullStops(sky).toFixed(2)} EV`}</span>
                     </div>
                     <div className="edit-slider-row">
-                        <label htmlFor="edit-horizon">Horizon</label>
+                        <span className="edit-slider-label">
+                            <label htmlFor="edit-horizon">Horizon</label>
+                            <HelpTip label="Horizon">{EDIT_HELP.horizon}</HelpTip>
+                        </span>
                         <input
                             id="edit-horizon"
                             type="range"
@@ -761,18 +892,8 @@ function EditModal({ isOpen, onClose, onApply, onRevert, photoName, directory, i
                         </button>
                     </div>
                     <p className="modal-hint edit-hint">
-                        For a bird against a bright sky, reach for <strong>Shadows</strong> before
-                        Exposure: it opens the bird up and cannot touch the sky at all, where raising
-                        Exposure lifts both and blows the sky white. If the sky is already gone,
-                        <strong> Highlights</strong> rolls the top of the range off to stop it clipping,
-                        and <strong>Sky</strong> takes up to two stops off the sky itself, leaving the
-                        darker half of the frame where it was. Sky covers the whole photo until you drop
-                        the <strong>Horizon</strong>, which keeps the pull off everything below the line.
-                    </p>
-                    <p className="modal-hint edit-hint">
-                        <strong>Pick grey</strong> sets Temperature and Tint from one click: choose
-                        something in the photo that ought to be neutral — an overcast sky, a pale
-                        branch — and the cast comes off the whole frame.
+                        New to any of this? Hover the <strong>?</strong> beside a control and it
+                        says what it does and when to reach for it.
                     </p>
                     <p className="modal-hint edit-hint">
                         Drag on the photo to draw a crop, drag inside it to move, or drag a corner to resize.

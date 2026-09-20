@@ -1,4 +1,6 @@
-import {
+import { render, screen, fireEvent } from '@testing-library/react';
+import EditModal, {
+  EDIT_HELP,
   buildToneLUT, applyHighlights, applySkyPull, applyShadows,
   whiteBalanceGains, greyPointWhiteBalance, skyGradient, skyPullStops, shadowLift,
   normalizedAspect, fitCropToAspect, rectFromAnchor,
@@ -319,5 +321,90 @@ describe('the locked crop ratio', () => {
     expect(box.x + box.w).toBeLessThanOrEqual(1);
     expect(box.y + box.h).toBeLessThanOrEqual(1);
     expect(box.h).toBeCloseTo(0.5, 10); // the bottom edge is the limit here
+  });
+});
+
+// The editor is only as approachable as its "?"s, so the pairing between a
+// control and the copy behind its tip is held here rather than left to drift.
+describe('the control help tips', () => {
+  // Each entry is the tip's accessible name and the EDIT_HELP key it shows.
+  const TIPS = [
+    ['white balance', 'colour'],
+    ['the grey point picker', 'pickGrey'],
+    ['Temperature', 'temperature'],
+    ['Tint', 'tint'],
+    ['the tone controls', 'tone'],
+    ['Exposure', 'exposure'],
+    ['Black level', 'black'],
+    ['Highlights', 'highlights'],
+    ['Shadows', 'shadows'],
+    ['Sky', 'sky'],
+    ['Horizon', 'horizon'],
+  ];
+
+  const openEditor = (props = {}) => render(
+    <EditModal
+      isOpen
+      onClose={() => { }}
+      onApply={() => { }}
+      onRevert={() => { }}
+      photoName="100_IMG_0001.JPG"
+      directory="session-1"
+      initialEdit={null}
+      isEdited={false}
+      isBusy={false}
+      {...props}
+    />
+  );
+
+  test('every control carries one, and every piece of copy is reachable', () => {
+    openEditor();
+    TIPS.forEach(([name]) => {
+      expect(screen.getByRole('button', { name: `About ${name}` })).toBeInTheDocument();
+    });
+    expect(TIPS.map(([, key]) => key).sort()).toEqual(Object.keys(EDIT_HELP).sort());
+  });
+
+  test('the guidance comes up on hover and goes again on the way out', () => {
+    openEditor();
+    const tip = screen.getByRole('button', { name: 'About the grey point picker' });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(tip);
+    const bubble = screen.getByRole('tooltip');
+    expect(bubble).toHaveTextContent(/neutral grey or white/i);
+    // The bubble is the button's description, so a screen reader gets it too.
+    expect(tip).toHaveAttribute('aria-describedby', bubble.id);
+
+    fireEvent.mouseLeave(tip);
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
+  test('a tip opens on focus, and Escape closes the tip before the editor', () => {
+    const onClose = jest.fn();
+    openEditor({ onClose });
+    const tip = screen.getByRole('button', { name: 'About Shadows' });
+
+    fireEvent.focus(tip);
+    expect(screen.getByRole('tooltip')).toHaveTextContent(/against a bright sky/i);
+
+    fireEvent.keyDown(tip, { key: 'Escape' });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+
+    // With no bubble up the key goes back to meaning "close the editor".
+    fireEvent.keyDown(tip, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  test('a tap works where there is no pointer to hover with', () => {
+    openEditor();
+    const tip = screen.getByRole('button', { name: 'About Temperature' });
+
+    fireEvent.pointerDown(tip, { pointerType: 'touch' });
+    expect(screen.getByRole('tooltip')).toHaveTextContent(/blue-to-orange/i);
+
+    fireEvent.pointerDown(tip, { pointerType: 'touch' });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
   });
 });
