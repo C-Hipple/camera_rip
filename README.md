@@ -8,6 +8,7 @@ A web-based application for importing photos from your camera's SD card, reviewi
 - **Photo Review**: Navigate through imported photos with keyboard shortcuts
 - **Smart Selection**: Mark photos for export with visual feedback
 - **Pin & Compare**: Pin one photo to compare side-by-side with others
+- **Find Blurry Photos**: Scan a session for shots with nothing in focus and mark them for deletion, ready to review before anything is deleted
 - **Non-Destructive Editing**: Crop and adjust exposure and black level; the untouched original is kept in an `unedited/` folder and can be restored or compared side-by-side at any time
 - **Batch Export**: Copy selected JPEGs to an export folder
 - **Raw File Export**: Copy corresponding raw files (Canon CR3, Olympus ORF) directly from SD card for selected photos
@@ -123,14 +124,27 @@ The frontend is embedded directly into the Go binary using Go's `embed` package.
 4. The control bar under the film strip is split in two: the top row acts on
    the photo on screen (navigate, select, mark for deletion, edit, compare,
    upload, change view) and the row below the divider acts on the whole
-   session (save, export raw, delete from disk). Every shortcut is printed on
-   the button that uses it
+   session (save, export raw, find blurry, delete from disk). Every shortcut
+   is printed on the button that uses it
 5. Use the **pin feature** to compare photos:
    - Press **`h`** to pin the current photo
    - Navigate to other photos to compare side-by-side
    - Press **`h`** again or **`Esc`** to unpin
 6. Click **Save N Selections** on the session row when done
 7. Selected JPEGs are copied to `~/Pictures/photos/[timestamp]/selected/`
+
+#### Clear out the missed shots
+
+Click **Find Blurry** on the session row to check the focus of every photo you
+have not already selected, saved or marked. Photos with nothing sharp anywhere
+in the frame are marked for deletion, just as if you had pressed **`d`** on
+each, and the carousel switches to **Marked for Deletion** so you can review
+them. Nothing is deleted yet: press **`d`** on any photo worth keeping, then
+click **Delete N from Disk** and confirm. The check judges the sharpest part of
+the frame, so a small sharp bird against a deliberately blurred background
+counts as in focus, and it errs on the side of keeping a doubtful photo. You
+can carry on reviewing while it runs, and anything you select in the meantime
+is never marked.
 
 ### 3. Edit a Photo
 

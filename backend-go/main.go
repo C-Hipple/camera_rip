@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"image"
 	"image/jpeg"
 	"io"
 	"io/fs"
@@ -475,6 +474,7 @@ func main() {
 	http.HandleFunc("/api/sd-cleanup", corsHandler(sdCleanupHandler))
 	http.HandleFunc("/api/sd-space", corsHandler(sdSpaceHandler))
 	http.HandleFunc("/api/delete-photos", corsHandler(deletePhotosHandler))
+	http.HandleFunc("/api/detect-blur", corsHandler(detectBlurHandler))
 	http.HandleFunc("/api/rename-directory", corsHandler(renameDirectoryHandler))
 	http.HandleFunc("/api/photo-metadata", corsHandler(photoMetadataHandler))
 	http.HandleFunc("/api/edits", corsHandler(editsHandler))
@@ -2463,28 +2463,9 @@ func generateThumbnail(directory, filename string) error {
 		return nil // Already exists
 	}
 
-	originalPhotoPath := filepath.Join(photoBaseDir, directory, filename)
-
-	var img image.Image
-	if isRawFile(filename) {
-		jpegData, err := extractEmbeddedJPEG(originalPhotoPath)
-		if err != nil {
-			return fmt.Errorf("extracting embedded JPEG from %s: %w", filename, err)
-		}
-		img, err = jpeg.Decode(bytes.NewReader(jpegData))
-		if err != nil {
-			return fmt.Errorf("decoding embedded JPEG from %s: %w", filename, err)
-		}
-	} else {
-		file, err := os.Open(originalPhotoPath)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		img, _, err = image.Decode(file)
-		if err != nil {
-			return err
-		}
+	img, err := decodePhoto(filepath.Join(photoBaseDir, directory, filename))
+	if err != nil {
+		return err
 	}
 
 	thumb := resize.Thumbnail(uint(thumbnailSize), uint(thumbnailSize), img, resize.Lanczos3)
