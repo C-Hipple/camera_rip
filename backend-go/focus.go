@@ -129,15 +129,28 @@ func focusWorkingImage(img image.Image) *image.Gray {
 	return lumaImage(resize.Resize(rw, rh, gray, resize.Lanczos3))
 }
 
+// focusReading is a photo's focus score and where it came from: the centre of
+// its sharpest tile, as fractions of the frame's width and height.
+type focusReading struct {
+	score float64
+	x, y  float64
+}
+
 // focusScore rates how sharp the sharpest part of a photo is, as described at
 // the top of this file. A frame with no tile detailed enough to judge scores
 // zero: there is nothing in it in focus.
 func focusScore(img image.Image) float64 {
+	return focusMeasure(img).score
+}
+
+// focusMeasure is focusScore, along with where in the frame the score came
+// from, which is what tells a sharp bird from a sharp twig when tuning.
+func focusMeasure(img image.Image) focusReading {
 	g := focusWorkingImage(img)
 	b := g.Bounds()
 	w, h := b.Dx(), b.Dy()
 	if w < 3 || h < 3 {
-		return 0
+		return focusReading{}
 	}
 
 	// A 1-2-1 binomial pass in each direction knocks the remaining pixel noise
@@ -184,7 +197,7 @@ func focusScore(img image.Image) float64 {
 	}
 
 	// A frame only one cell across (or down) gets one-cell-wide tiles.
-	best := 0.0
+	var best focusReading
 	for r := 0; r < max(rows-1, 1); r++ {
 		for c := 0; c < max(cols-1, 1); c++ {
 			var tl, tg, tn float64
@@ -197,7 +210,12 @@ func focusScore(img image.Image) float64 {
 			if tn == 0 || tg/tn < focusMinGradient {
 				continue
 			}
-			best = math.Max(best, tl/tg)
+			if ratio := tl / tg; ratio > best.score {
+				// The tile spans two cells, or what is left of the frame.
+				cx := 1 + c*cell + min(2*cell, iw-c*cell)/2
+				cy := 1 + r*cell + min(2*cell, ih-r*cell)/2
+				best = focusReading{score: ratio, x: float64(cx) / float64(w), y: float64(cy) / float64(h)}
+			}
 		}
 	}
 	return best
@@ -210,16 +228,16 @@ func absInt(v int) int {
 	return v
 }
 
-// photoFocusScore decodes and scores one photo on disk.
-func photoFocusScore(path string) (float64, error) {
+// photoFocus decodes and measures one photo on disk.
+func photoFocus(path string) (focusReading, error) {
 	img, err := decodePhoto(path)
 	if err != nil {
-		return 0, err
+		return focusReading{}, err
 	}
 	if b := img.Bounds(); max(b.Dx(), b.Dy()) < minFocusEdge {
-		return 0, fmt.Errorf("%dx%d is too small to judge focus", b.Dx(), b.Dy())
+		return focusReading{}, fmt.Errorf("%dx%d is too small to judge focus", b.Dx(), b.Dy())
 	}
-	return focusScore(img), nil
+	return focusMeasure(img), nil
 }
 
 type focusResult struct {
@@ -318,8 +336,8 @@ func detectBlurHandler(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer wg.Done()
 			for name := range jobs {
-				score, err := photoFocusScore(filepath.Join(targetDir, name))
-				results <- focusResult{name: name, score: score, err: err}
+				reading, err := photoFocus(filepath.Join(targetDir, name))
+				results <- focusResult{name: name, score: reading.score, err: err}
 			}
 		}()
 	}

@@ -182,6 +182,18 @@ func TestFocusScoreFindsASmallSharpSubject(t *testing.T) {
 	}
 }
 
+// A reading says where its score came from: on the small bird, not the sky.
+func TestFocusMeasureLocatesTheSharpestTile(t *testing.T) {
+	r := focusMeasure(renderScene(smallBird, 1024, 683, 2))
+	if r.score != focusScore(renderScene(smallBird, 1024, 683, 2)) {
+		t.Errorf("focusMeasure scored %.3f, focusScore disagrees", r.score)
+	}
+	// The bird sits at 50% across and 45% down; a tile is 48 of 1024 pixels.
+	if math.Abs(r.x-0.5) > 0.06 || math.Abs(r.y-0.45) > 0.08 {
+		t.Errorf("sharpest tile at %.0f%%,%.0f%%, want on the bird at 50%%,45%%", 100*r.x, 100*r.y)
+	}
+}
+
 // Exposure scales the Laplacian and the gradient alike, so an underexposed
 // frame scores as its correctly exposed twin does; and the noise of a
 // high-ISO frame neither hides a sharp subject nor sharpens a missed one.
@@ -258,9 +270,9 @@ func encodeTestJPEG(t *testing.T, img image.Image) []byte {
 
 // A raw file's embedded thumbnail can be 160x120, too small to judge; the
 // photo is reported unreadable rather than guessed at.
-func TestPhotoFocusScoreRefusesATinyPreview(t *testing.T) {
+func TestPhotoFocusRefusesATinyPreview(t *testing.T) {
 	path := writeTemp(t, encodeTestJPEG(t, renderScene(wholeScene, 160, 120, 1)))
-	if _, err := photoFocusScore(path); err == nil {
+	if _, err := photoFocus(path); err == nil {
 		t.Error("a 160x120 photo was scored, want an error")
 	}
 }
