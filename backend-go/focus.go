@@ -5,16 +5,23 @@ package main
 // in one pass. Nothing here touches a file. The frontend marks whatever this
 // reports, and deleting still goes through the usual review and confirmation.
 //
-// A photo is reduced to its luma at a fixed working size, so frames from any
-// camera are measured on the same scale and most sensor noise is averaged
-// away, then lightly smoothed and scored in overlapping tiles. In each tile
-// the energy of the Laplacian is divided by the energy of the gradient. Both
-// grow with the square of the contrast and with how much edge the tile holds,
-// so the ratio cancels exposure and subject matter and is left measuring how
-// wide the edges are: a crisp edge scores several times higher than the same
-// edge defocused. A photo scores its best tile, which is what keeps a small
-// sharp bird against a smooth, deliberately blurred background from being
-// called out of focus.
+// A photo is judged by how wide its edges are. Defocus spreads every edge
+// over a distance that grows with the miss, and an edge's width, its contrast
+// divided by its steepest slope, measures that spread in pixels whatever the
+// edge belongs to and however bright it is. Only strong edges are measured:
+// the outline of a bird against the sky, or of a twig against the leaves
+// behind it. Faint ones are where sensor noise and the camera's own noise
+// reduction pass for detail, and at high ISO that mottling is crisp enough to
+// make a missed frame look sharp. The frame is scored in overlapping tiles,
+// each by the width of its narrowest edges, and a photo scores its best tile.
+// That is what keeps a small sharp bird against a smooth, deliberately blurred
+// background from being called out of focus: the bird's tile is sharp, and
+// nothing else has to be.
+//
+// Everything is measured on the photo's own pixels. Shrinking a frame first
+// shrinks a missed shot's blur towards the width of an in-focus edge, leaving
+// too little between them to judge by; cropping keeps the scale, so an edited
+// photo is judged the same as its original.
 
 import (
 	"bytes"
@@ -31,35 +38,51 @@ import (
 	"runtime"
 	"sort"
 	"sync"
-
-	"github.com/nfnt/resize"
 )
 
 const (
-	// Long edge, in pixels, every photo is reduced to before it is measured.
-	// A totally missed focus still smears an edge across several pixels at
-	// this size, while the five- or six-fold reduction from a camera frame
-	// averages most sensor noise away. A frame that is merely a touch soft
-	// comes out sharp here, on purpose: the detector is after the shots nobody
-	// would keep, not a pixel-peeping cull.
-	focusWorkingSize = 1024
+	// Contrast, in grey levels, an edge needs before its width is measured:
+	// about a quarter of the tonal range. The outline of a bird or a branch
+	// clears it easily; noise, and the blotches noise reduction leaves behind
+	// at high ISO, stay well under it.
+	focusEdgeContrast = 70
 
-	// Side of the square tiles a frame is scored in, at the working size. They
-	// step by half a tile, so a subject straddling a boundary still fills one.
-	focusTileSize = 48
+	// Brightness range, in grey levels, that the most contrasty patch of a
+	// clear, well-exposed frame spans at least. Haze and underexposure flatten
+	// every edge in a frame alike, so a frame whose strongest patch falls
+	// short of this has focusEdgeContrast scaled down in proportion, though
+	// never below half. A squirrel in morning fog is then judged by its own
+	// dulled edges instead of written off for having none strong enough.
+	focusFullContrast = 160
 
-	// Mean squared gradient a tile needs before it is scored. Clear sky and
-	// smooth bokeh have almost none, and their ratio is noise over noise,
-	// which says nothing about focus.
-	focusMinGradient = 4.0
+	// Widest edge, in pixels, that counts towards a tile's score. Anything
+	// wider is blurry whatever else the tile holds, and a photo with no tile
+	// of narrower edges scores this: there is nothing in it in focus.
+	focusMaxEdgeWidth = 9.0
 
-	// Photos whose best tile scores below this are reported as blurry. It was
-	// calibrated on real photographs defocused with a disc kernel at the
-	// working size: in-focus frames, underexposed, noisy and small-subject ones
-	// included, scored 0.87 and up and a pixel of defocus about 0.7 and up,
-	// while three pixels (a 35-pixel blur on a 24 MP frame) mostly scored under
-	// 0.5. It errs towards keeping a doubtful photo.
-	blurThreshold = 0.6
+	// A line thinner than the blur, a twig or a stalk of grass, loses contrast
+	// as it spreads, so it reads narrower than an edge defocused as much. A
+	// line's width is scaled up by this to match.
+	focusLineFactor = 1.5
+
+	// Side, in pixels, of the square tiles a frame is scored in. They step by
+	// half a tile, so a subject straddling a boundary still fills one.
+	focusTileSize = 256
+
+	// Strong edges a tile needs before it is judged, and the rank of the one
+	// whose width is its score: the 150th narrowest. A rank this deep keeps a
+	// few stray specks from passing a missed frame off as sharp, and a tile
+	// with fewer strong edges says too little to go on.
+	focusTileEdges = 150
+
+	// Photos whose best tile's edges are at least this wide, in pixels, are
+	// reported blurry. It was calibrated on 24 MP shoots from a Canon R10 with
+	// an RF 200-800mm, ISO 160 to 20000: in-focus frames scored up to 3.9, soft
+	// but keepable ones (heat shimmer over a marsh, a heron in deep shade) up
+	// to 5.2, and the missed ones 5.7 and up, most of them over 6. It errs
+	// towards keeping a doubtful photo. A camera with finer pixels spreads the
+	// same blur over more of them, and would want it raised.
+	blurThreshold = 5.5
 
 	// Shortest long edge a photo can have and still be judged. The preview
 	// embedded in some raw files is a 160x120 thumbnail, far too small to say
@@ -67,10 +90,16 @@ const (
 	// guessed at.
 	minFocusEdge = 320
 
-	// Upper bound on photos decoded at once. A 24 MP frame takes about 36 MB
-	// decoded, so this caps the memory the check can hold.
+	// Upper bound on photos measured at once. A 24 MP frame takes about 36 MB
+	// decoded and 48 MB more while it is measured, so this caps the memory the
+	// check can hold.
 	maxFocusWorkers = 8
 )
+
+// Distances, in pixels, either side of an edge at which the profile across it
+// is sampled. The contrast is the largest difference between a pair, which
+// reaches the full step for any edge narrow enough to count.
+var focusProfileSteps = [...]float64{1, 1.5, 2, 3, 4, 6, 8, 12}
 
 // decodePhoto reads the photo at path, going through the embedded JPEG
 // preview for a raw file.
@@ -110,25 +139,6 @@ func lumaImage(img image.Image) *image.Gray {
 	return gray
 }
 
-// focusWorkingImage is img's luma with its long edge reduced to
-// focusWorkingSize. A smaller photo is measured as it is. Lanczos keeps edges
-// as crisp as an ideal reduction would; a softer filter reads every photo a
-// little blurrier than the calibration behind blurThreshold assumed.
-func focusWorkingImage(img image.Image) *image.Gray {
-	gray := lumaImage(img)
-	w, h := gray.Bounds().Dx(), gray.Bounds().Dy()
-	if w <= focusWorkingSize && h <= focusWorkingSize {
-		return gray
-	}
-	var rw, rh uint
-	if w >= h {
-		rw = focusWorkingSize
-	} else {
-		rh = focusWorkingSize
-	}
-	return lumaImage(resize.Resize(rw, rh, gray, resize.Lanczos3))
-}
-
 // focusReading is a photo's focus score and where it came from: the centre of
 // its sharpest tile, as fractions of the frame's width and height.
 type focusReading struct {
@@ -136,96 +146,230 @@ type focusReading struct {
 	x, y  float64
 }
 
-// focusScore rates how sharp the sharpest part of a photo is, as described at
-// the top of this file. A frame with no tile detailed enough to judge scores
-// zero: there is nothing in it in focus.
+// focusScore is the width, in pixels, of the edges in the sharpest part of a
+// photo, as described at the top of this file. The higher it is, the blurrier
+// the photo. A frame with no tile of strong, narrow edges scores
+// focusMaxEdgeWidth: there is nothing in it in focus.
 func focusScore(img image.Image) float64 {
 	return focusMeasure(img).score
+}
+
+// focusField is a photo's luma after a 1-2-1 binomial pass in each direction,
+// which keeps pixel noise from dominating the slopes. It is stored at 16 times
+// scale, which holds the pass exactly.
+type focusField struct {
+	w, h int
+	pix  []uint16
+}
+
+func newFocusField(g *image.Gray) *focusField {
+	b := g.Bounds()
+	w, h := b.Dx(), b.Dy()
+	f := &focusField{w: w, h: h, pix: make([]uint16, w*h)}
+	// Across each row first, edges clamped.
+	for y := 0; y < h; y++ {
+		src := g.Pix[y*g.Stride : y*g.Stride+w]
+		dst := f.pix[y*w : (y+1)*w]
+		for x := range dst {
+			dst[x] = uint16(src[max(x-1, 0)]) + 2*uint16(src[x]) + uint16(src[min(x+1, w-1)])
+		}
+	}
+	// Then down each column, in place, keeping the row above as it was.
+	above, row := make([]uint16, w), make([]uint16, w)
+	copy(above, f.pix[:w])
+	for y := 0; y < h; y++ {
+		copy(row, f.pix[y*w:(y+1)*w])
+		below := row
+		if y+1 < h {
+			below = f.pix[(y+1)*w : (y+2)*w]
+		}
+		dst := f.pix[y*w : (y+1)*w]
+		for x := range dst {
+			dst[x] = above[x] + 2*row[x] + below[x]
+		}
+		above, row = row, above
+	}
+	return f
+}
+
+// at is the smoothed luma at a fractional position, in grey levels,
+// interpolated between the four pixels around it and clamped to the frame.
+func (f *focusField) at(x, y float64) float64 {
+	x = math.Max(0, math.Min(float64(f.w-1), x))
+	y = math.Max(0, math.Min(float64(f.h-1), y))
+	x0, y0 := min(int(x), f.w-2), min(int(y), f.h-2)
+	fx, fy := x-float64(x0), y-float64(y0)
+	i := y0*f.w + x0
+	top := float64(f.pix[i])*(1-fx) + float64(f.pix[i+1])*fx
+	bottom := float64(f.pix[i+f.w])*(1-fx) + float64(f.pix[i+f.w+1])*fx
+	return (top*(1-fy) + bottom*fy) / 16
+}
+
+// strongestContrast is the largest range of brightness, in grey levels,
+// inside any one cell of the field. A cell is far wider than any blur this
+// looks for, so defocus moves an edge's brightness around inside it without
+// shrinking the range.
+func (f *focusField) strongestContrast(cell int) float64 {
+	cols := (f.w + cell - 1) / cell
+	lo, hi := make([]uint16, cols), make([]uint16, cols)
+	strongest := 0
+	for y := 0; y < f.h; y++ {
+		if y%cell == 0 {
+			for c := range lo {
+				lo[c], hi[c] = math.MaxUint16, 0
+			}
+		}
+		row := f.pix[y*f.w : (y+1)*f.w]
+		for x, v := range row {
+			c := x / cell
+			lo[c], hi[c] = min(lo[c], v), max(hi[c], v)
+		}
+		if y%cell == cell-1 || y == f.h-1 {
+			for c := range lo {
+				strongest = max(strongest, int(hi[c])-int(lo[c]))
+			}
+		}
+	}
+	return float64(strongest) / 16
+}
+
+// gradient is the central difference at pixel i, at 32 times the slope in grey
+// levels per pixel: 16 from the field's scale, 2 from spanning two pixels.
+func (f *focusField) gradient(i int) (gx, gy int32) {
+	return int32(f.pix[i+1]) - int32(f.pix[i-1]), int32(f.pix[i+f.w]) - int32(f.pix[i-f.w])
+}
+
+// edgeWidth measures the edge through (x, y), whose gradient is (gx, gy) with
+// magnitude m (both at the gradient's scale), returning its width in pixels
+// and its contrast in grey levels. The width is the contrast over the slope,
+// with a line's scaled by focusLineFactor.
+func (f *focusField) edgeWidth(x, y int, gx, gy int32, m float64) (width, contrast float64) {
+	nx, ny := float64(gx)/m, float64(gy)/m
+	var up, down [len(focusProfileSteps)]float64
+	peak := 0
+	for k, d := range focusProfileSteps {
+		up[k] = f.at(float64(x)+d*nx, float64(y)+d*ny)
+		down[k] = f.at(float64(x)-d*nx, float64(y)-d*ny)
+		if c := up[k] - down[k]; c > contrast {
+			contrast, peak = c, k
+		}
+	}
+	if contrast <= 0 {
+		return math.Inf(1), 0
+	}
+	width = contrast / (m / 32)
+
+	// A step stays at its new level beyond the edge; a line comes back. Look
+	// for the profile falling back by half the contrast on either side,
+	// within a few widths of the edge.
+	reach := 2.5 * width
+	top, bottom := up[peak], down[peak]
+	for k, d := range focusProfileSteps {
+		if d > reach {
+			break
+		}
+		top, bottom = math.Max(top, up[k]), math.Min(bottom, down[k])
+	}
+	for k, d := range focusProfileSteps {
+		if d > reach {
+			break
+		}
+		if k > peak && (top-up[k] > contrast/2 || down[k]-bottom > contrast/2) {
+			return width * focusLineFactor, contrast
+		}
+	}
+	return width, contrast
 }
 
 // focusMeasure is focusScore, along with where in the frame the score came
 // from, which is what tells a sharp bird from a sharp twig when tuning.
 func focusMeasure(img image.Image) focusReading {
-	g := focusWorkingImage(img)
+	none := focusReading{score: focusMaxEdgeWidth}
+	g := lumaImage(img)
 	b := g.Bounds()
 	w, h := b.Dx(), b.Dy()
-	if w < 3 || h < 3 {
-		return focusReading{}
+	if w < 5 || h < 5 {
+		return none
 	}
-
-	// A 1-2-1 binomial pass in each direction knocks the remaining pixel noise
-	// down before differencing, which would otherwise amplify it. Edges clamp.
-	at := func(x, y int) float64 {
-		x = min(max(x, 0), w-1)
-		y = min(max(y, 0), h-1)
-		return float64(g.Pix[y*g.Stride+x])
-	}
-	smooth := make([]float64, w*h)
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			s := 0.0
-			for dy := -1; dy <= 1; dy++ {
-				for dx := -1; dx <= 1; dx++ {
-					s += float64((2-absInt(dx))*(2-absInt(dy))) * at(x+dx, y+dy)
-				}
-			}
-			smooth[y*w+x] = s / 16
-		}
-	}
-
-	// Accumulate the squared Laplacian and squared gradient into half-tile
-	// cells over the interior, so each tile is just its 2x2 block of cells.
+	f := newFocusField(g)
 	cell := focusTileSize / 2
-	iw, ih := w-2, h-2
-	cols, rows := (iw+cell-1)/cell, (ih+cell-1)/cell
-	lap := make([]float64, cols*rows)
-	grad := make([]float64, cols*rows)
-	count := make([]float64, cols*rows)
-	for y := 1; y < h-1; y++ {
-		row := ((y - 1) / cell) * cols
-		for x := 1; x < w-1; x++ {
-			c := smooth[y*w+x]
-			n, s := smooth[(y-1)*w+x], smooth[(y+1)*w+x]
-			wst, e := smooth[y*w+x-1], smooth[y*w+x+1]
-			l := 4*c - n - s - wst - e
-			gx, gy := (e-wst)/2, (s-n)/2
-			i := row + (x-1)/cell
-			lap[i] += l * l
-			grad[i] += gx*gx + gy*gy
-			count[i]++
+	minContrast := focusEdgeContrast * math.Max(0.5, math.Min(1, f.strongestContrast(cell)/focusFullContrast))
+
+	// Each half-tile cell keeps a histogram of the widths of the strong edges
+	// in it, so a tile can rank its edges from its 2x2 block of cells without
+	// sorting.
+	const binsPerPixel = 50
+	bins := int(focusMaxEdgeWidth * binsPerPixel)
+	cols, rows := (w+cell-1)/cell, (h+cell-1)/cell
+	hist := make([]uint32, cols*rows*bins)
+
+	// An edge narrower than focusMaxEdgeWidth with minContrast across it is
+	// at least this steep, so most of the frame is ruled out by its slope
+	// alone.
+	minGradient := 32 * minContrast / focusMaxEdgeWidth
+	minSquared := int32(minGradient * minGradient)
+	for y := 2; y < h-2; y++ {
+		for x := 2; x < w-2; x++ {
+			i := y*w + x
+			gx, gy := f.gradient(i)
+			m2 := gx*gx + gy*gy
+			if m2 < minSquared {
+				continue
+			}
+			// Only the steepest point across an edge measures it, so the
+			// pixel must be at least as steep as its neighbours on either
+			// side, along the gradient to the nearest 45 degrees.
+			ax, ay := math.Abs(float64(gx)), math.Abs(float64(gy))
+			var o int
+			switch {
+			case ax > 2.414*ay:
+				o = 1
+			case ay > 2.414*ax:
+				o = w
+			case (gx > 0) == (gy > 0):
+				o = w + 1
+			default:
+				o = w - 1
+			}
+			ax2, ay2 := f.gradient(i - o)
+			bx2, by2 := f.gradient(i + o)
+			if m2 < ax2*ax2+ay2*ay2 || m2 < bx2*bx2+by2*by2 {
+				continue
+			}
+			width, contrast := f.edgeWidth(x, y, gx, gy, math.Sqrt(float64(m2)))
+			if contrast < minContrast || width >= focusMaxEdgeWidth {
+				continue
+			}
+			c := (y/cell)*cols + x/cell
+			hist[c*bins+int(width*binsPerPixel)]++
 		}
 	}
 
 	// A frame only one cell across (or down) gets one-cell-wide tiles.
-	var best focusReading
+	best := none
 	for r := 0; r < max(rows-1, 1); r++ {
 		for c := 0; c < max(cols-1, 1); c++ {
-			var tl, tg, tn float64
-			for rr := r; rr <= min(r+1, rows-1); rr++ {
-				for cc := c; cc <= min(c+1, cols-1); cc++ {
-					i := rr*cols + cc
-					tl, tg, tn = tl+lap[i], tg+grad[i], tn+count[i]
+			count := 0
+			for bin := 0; bin < bins; bin++ {
+				for rr := r; rr <= min(r+1, rows-1); rr++ {
+					for cc := c; cc <= min(c+1, cols-1); cc++ {
+						count += int(hist[(rr*cols+cc)*bins+bin])
+					}
 				}
-			}
-			if tn == 0 || tg/tn < focusMinGradient {
-				continue
-			}
-			if ratio := tl / tg; ratio > best.score {
-				// The tile spans two cells, or what is left of the frame.
-				cx := 1 + c*cell + min(2*cell, iw-c*cell)/2
-				cy := 1 + r*cell + min(2*cell, ih-r*cell)/2
-				best = focusReading{score: ratio, x: float64(cx) / float64(w), y: float64(cy) / float64(h)}
+				if count < focusTileEdges {
+					continue
+				}
+				if width := (float64(bin) + 0.5) / binsPerPixel; width < best.score {
+					// The tile spans two cells, or what is left of the frame.
+					cx := c*cell + min(2*cell, w-c*cell)/2
+					cy := r*cell + min(2*cell, h-r*cell)/2
+					best = focusReading{score: width, x: float64(cx) / float64(w), y: float64(cy) / float64(h)}
+				}
+				break
 			}
 		}
 	}
 	return best
-}
-
-func absInt(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 // photoFocus decodes and measures one photo on disk.
@@ -253,8 +397,10 @@ type focusResult struct {
 // Like an import, the response streams NDJSON so a big shoot shows progress:
 // {"type":"start","total":n}, then {"type":"progress","checked":k,"total":n},
 // then {"type":"done","checked":n,"blurry":[...],"failed":[...],
-// "scores":{...},"threshold":t}. A photo that cannot be read is listed under
-// failed, never under blurry. Closing the request stops the work.
+// "scores":{...},"threshold":t}, where each score is a photo's edge width in
+// pixels and the blurry ones are those at or above the threshold. A photo
+// that cannot be read is listed under failed, never under blurry. Closing the
+// request stops the work.
 func detectBlurHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -359,7 +505,7 @@ func detectBlurHandler(w http.ResponseWriter, r *http.Request) {
 			failed = append(failed, res.name)
 		} else {
 			scores[res.name] = math.Round(res.score*1000) / 1000
-			if res.score < blurThreshold {
+			if res.score >= blurThreshold {
 				blurry = append(blurry, res.name)
 			}
 		}

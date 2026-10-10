@@ -133,34 +133,68 @@ func addNoise(img *image.Gray, sigma float64) *image.Gray {
 	return out
 }
 
+// fog veils every value towards a bright grey, keeping k of its contrast, as
+// haze between the lens and the subject does.
+func fog(img *image.Gray, k float64) *image.Gray {
+	out := image.NewGray(img.Bounds())
+	for i, v := range img.Pix {
+		out.Pix[i] = uint8(math.Round(k*float64(v) + (1-k)*200))
+	}
+	return out
+}
+
+// stripes draws dark lines of the given width across a plain sky, tilted and
+// 40 pixels apart: twigs when they are thin, branches when they are thick.
+func stripes(w, h int, width float64) *image.Gray {
+	const ss = 4
+	img := image.NewGray(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			sum := 0.0
+			for sy := 0; sy < ss; sy++ {
+				for sx := 0; sx < ss; sx++ {
+					u := float64(x) + (float64(sx)+0.5)/ss
+					v := float64(y) + (float64(sy)+0.5)/ss
+					if math.Mod(0.94*u+0.34*v, 40) < width {
+						sum += 40
+					} else {
+						sum += 190
+					}
+				}
+			}
+			img.Pix[y*img.Stride+x] = uint8(math.Round(sum / (ss * ss)))
+		}
+	}
+	return img
+}
+
 var (
 	wholeScene = sceneSpec{birdRadius: 0.12, branch: true}
 	smallBird  = sceneSpec{birdRadius: 0.04}
 )
 
-// A frame that is in focus scores above the threshold, one that is a touch
-// soft does too, and one whose focus was missed outright scores below it,
-// with the score falling steadily as the defocus grows.
+// A frame that is in focus scores below the threshold, one that is a touch
+// soft does too, and one whose focus was missed outright scores at or above
+// it, with the edges measuring wider as the defocus grows.
 func TestFocusScoreTellsSharpFromDefocused(t *testing.T) {
 	sharp := renderScene(wholeScene, 1024, 683, 2)
 	scores := []float64{focusScore(sharp)}
 	for _, radius := range []float64{1, 3, 6} {
 		scores = append(scores, focusScore(defocus(sharp, radius)))
 	}
-	if scores[0] < blurThreshold {
-		t.Errorf("in-focus frame scored %.3f, below the %.2f threshold", scores[0], blurThreshold)
+	if scores[0] >= blurThreshold {
+		t.Errorf("in-focus frame scored %.2f, not below the %g threshold", scores[0], blurThreshold)
 	}
-	// One pixel of defocus at the working size is about six on a 24 MP
-	// frame: soft at 100%, but nobody's idea of a missed shot.
-	if scores[1] < blurThreshold {
-		t.Errorf("slightly soft frame scored %.3f, below the %.2f threshold", scores[1], blurThreshold)
+	// A pixel of defocus is soft at 100%, but nobody's idea of a missed shot.
+	if scores[1] >= blurThreshold {
+		t.Errorf("slightly soft frame scored %.2f, not below the %g threshold", scores[1], blurThreshold)
 	}
-	if scores[3] >= blurThreshold {
-		t.Errorf("badly defocused frame scored %.3f, not below the %.2f threshold", scores[3], blurThreshold)
+	if scores[3] < blurThreshold {
+		t.Errorf("badly defocused frame scored %.2f, below the %g threshold", scores[3], blurThreshold)
 	}
 	for i := 1; i < len(scores); i++ {
-		if scores[i] >= scores[i-1] {
-			t.Errorf("scores %v do not fall as the defocus grows", scores)
+		if scores[i] <= scores[i-1] {
+			t.Errorf("scores %v do not rise as the defocus grows", scores)
 		}
 	}
 }
@@ -168,73 +202,105 @@ func TestFocusScoreTellsSharpFromDefocused(t *testing.T) {
 // The wildlife case: a small bird sharp against a plain sky is in focus, even
 // though nearly the whole frame has no detail at all.
 func TestFocusScoreFindsASmallSharpSubject(t *testing.T) {
-	sharp := renderScene(smallBird, 1024, 683, 2)
-	if got := focusScore(sharp); got < blurThreshold {
-		t.Errorf("small sharp subject scored %.3f, below the %.2f threshold", got, blurThreshold)
+	sharp := renderScene(smallBird, 1536, 1024, 2)
+	if got := focusScore(sharp); got >= blurThreshold {
+		t.Errorf("small sharp subject scored %.2f, not below the %g threshold", got, blurThreshold)
 	}
-	if got := focusScore(defocus(sharp, 4)); got >= blurThreshold {
-		t.Errorf("small defocused subject scored %.3f, not below the %.2f threshold", got, blurThreshold)
+	if got := focusScore(defocus(sharp, 4)); got < blurThreshold {
+		t.Errorf("small defocused subject scored %.2f, below the %g threshold", got, blurThreshold)
 	}
 	// A frame of nothing but out-of-focus background has nothing sharp in it.
 	bokeh := defocus(renderScene(sceneSpec{branch: true}, 1024, 683, 2), 6)
-	if got := focusScore(bokeh); got >= blurThreshold {
-		t.Errorf("background-only frame scored %.3f, not below the %.2f threshold", got, blurThreshold)
+	if got := focusScore(bokeh); got < blurThreshold {
+		t.Errorf("background-only frame scored %.2f, below the %g threshold", got, blurThreshold)
 	}
 }
 
 // A reading says where its score came from: on the small bird, not the sky.
 func TestFocusMeasureLocatesTheSharpestTile(t *testing.T) {
-	r := focusMeasure(renderScene(smallBird, 1024, 683, 2))
-	if r.score != focusScore(renderScene(smallBird, 1024, 683, 2)) {
-		t.Errorf("focusMeasure scored %.3f, focusScore disagrees", r.score)
+	scene := renderScene(smallBird, 1536, 1024, 2)
+	r := focusMeasure(scene)
+	if r.score != focusScore(scene) {
+		t.Errorf("focusMeasure scored %.2f, focusScore disagrees", r.score)
 	}
-	// The bird sits at 50% across and 45% down; a tile is 48 of 1024 pixels.
-	if math.Abs(r.x-0.5) > 0.06 || math.Abs(r.y-0.45) > 0.08 {
+	// The bird sits at 50% across and 45% down; tiles are 256 pixels, a
+	// sixth of the frame across, and step by half that.
+	if math.Abs(r.x-0.5) > 0.1 || math.Abs(r.y-0.45) > 0.15 {
 		t.Errorf("sharpest tile at %.0f%%,%.0f%%, want on the bird at 50%%,45%%", 100*r.x, 100*r.y)
 	}
 }
 
-// Exposure scales the Laplacian and the gradient alike, so an underexposed
-// frame scores as its correctly exposed twin does; and the noise of a
-// high-ISO frame neither hides a sharp subject nor sharpens a missed one.
+// An edge's width is its contrast over its slope, and exposure scales both,
+// so an underexposed frame scores as its correctly exposed twin does. Nor
+// does the noise of a high-ISO frame hide a sharp subject or sharpen a missed
+// one: noise never makes an edge as strong as the ones that are measured.
 func TestFocusScoreIgnoresExposureAndNoise(t *testing.T) {
 	sharp := renderScene(wholeScene, 1024, 683, 2)
 	base := focusScore(sharp)
-	if got := focusScore(darken(sharp, 0.3)); math.Abs(got-base) > 0.05*base {
-		t.Errorf("underexposed frame scored %.3f, want within 5%% of %.3f", got, base)
+	for _, k := range []float64{0.5, 0.3} {
+		if got := focusScore(darken(sharp, k)); math.Abs(got-base) > 0.1*base {
+			t.Errorf("frame darkened to %.0f%% scored %.2f, want within 10%% of %.2f", 100*k, got, base)
+		}
 	}
-	if got := focusScore(addNoise(sharp, 2)); got < blurThreshold {
-		t.Errorf("noisy in-focus frame scored %.3f, below the %.2f threshold", got, blurThreshold)
+	if got := focusScore(addNoise(sharp, 2)); got >= blurThreshold {
+		t.Errorf("noisy in-focus frame scored %.2f, not below the %g threshold", got, blurThreshold)
 	}
-	if got := focusScore(addNoise(defocus(sharp, 6), 1)); got >= blurThreshold {
-		t.Errorf("noisy defocused frame scored %.3f, not below the %.2f threshold", got, blurThreshold)
-	}
-}
-
-// Every photo is measured at the working size, so the same scene scores the
-// same whether the camera recorded it at 2048 or 4096 pixels across.
-func TestFocusScoreIsResolutionIndependent(t *testing.T) {
-	for _, spec := range []sceneSpec{wholeScene, smallBird} {
-		ref := focusScore(renderScene(spec, 1024, 683, 2))
-		for _, w := range []int{2048, 4096} {
-			got := focusScore(renderScene(spec, w, w*2/3, 1))
-			if math.Abs(got-ref) > 0.1*ref {
-				t.Errorf("%+v at %dpx scored %.3f, want within 10%% of %.3f at the working size", spec, w, got, ref)
-			}
+	for _, sigma := range []float64{1, 8} {
+		if got := focusScore(addNoise(defocus(sharp, 6), sigma)); got < blurThreshold {
+			t.Errorf("defocused frame with noise of %.0f levels scored %.2f, below the %g threshold", sigma, got, blurThreshold)
 		}
 	}
 }
 
+// Haze dulls every edge in a frame alike. The contrast an edge needs is set
+// against the strongest in the frame, so a sharp subject seen through fog
+// still has edges to measure, and a missed one is still blurry.
+func TestFocusScoreSeesThroughFog(t *testing.T) {
+	sharp := renderScene(wholeScene, 1024, 683, 2)
+	base := focusScore(sharp)
+	foggy := fog(sharp, 0.4)
+	if got := focusScore(foggy); math.Abs(got-base) > 0.1*base {
+		t.Errorf("sharp frame through fog scored %.2f, want within 10%% of %.2f in clear air", got, base)
+	}
+	if got := focusScore(defocus(foggy, 6)); got < blurThreshold {
+		t.Errorf("defocused frame through fog scored %.2f, below the %g threshold", got, blurThreshold)
+	}
+}
+
+// A twig thinner than the blur loses contrast as it spreads, which would read
+// narrower than a branch defocused as much without focusLineFactor.
+func TestFocusScoreReadsATwigLikeABranch(t *testing.T) {
+	twigs, branches := stripes(1024, 683, 2), stripes(1024, 683, 12)
+	for _, radius := range []float64{2, 3} {
+		twig, branch := focusScore(defocus(twigs, radius)), focusScore(defocus(branches, radius))
+		if math.Abs(twig-branch) > 0.2*branch {
+			t.Errorf("defocused by %.0f pixels, twigs scored %.2f and branches %.2f, want within 20%%", radius, twig, branch)
+		}
+	}
+}
+
+// Edges are measured in the photo's own pixels, and cropping keeps them, so a
+// photo edited down to its subject is judged as the frame it came from.
+func TestFocusScoreOfACrop(t *testing.T) {
+	frame := renderScene(smallBird, 3072, 2048, 1)
+	crop := frame.SubImage(image.Rect(1024, 410, 2048, 1434))
+	full, cropped := focusScore(frame), focusScore(crop)
+	if math.Abs(cropped-full) > 0.05*full {
+		t.Errorf("crop around the bird scored %.2f, want within 5%% of the full frame's %.2f", cropped, full)
+	}
+}
+
+// A frame with no strong edge anywhere has nothing in it in focus.
 func TestFocusScoreOfAFeaturelessFrame(t *testing.T) {
 	flat := image.NewGray(image.Rect(0, 0, 640, 480))
 	for i := range flat.Pix {
 		flat.Pix[i] = 128
 	}
-	if got := focusScore(flat); got != 0 {
-		t.Errorf("flat frame scored %.3f, want 0", got)
+	if got := focusScore(flat); got != focusMaxEdgeWidth {
+		t.Errorf("flat frame scored %.2f, want %.0f", got, focusMaxEdgeWidth)
 	}
-	if got := focusScore(renderScene(sceneSpec{}, 640, 480, 1)); got != 0 {
-		t.Errorf("empty sky scored %.3f, want 0", got)
+	if got := focusScore(renderScene(sceneSpec{}, 640, 480, 1)); got != focusMaxEdgeWidth {
+		t.Errorf("empty sky scored %.2f, want %.0f", got, focusMaxEdgeWidth)
 	}
 }
 

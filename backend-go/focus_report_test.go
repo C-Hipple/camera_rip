@@ -25,9 +25,10 @@ import (
 // many misses it would let through. Any other folder, such as an import
 // session, is scored as it stands.
 //
-// Each row is tab separated: the score, the label (or "-"), the verdict at the
-// current threshold, where the sharpest tile was as a percentage across and
-// down the frame, and the file. Photos that cannot be read are listed last.
+// Each row is tab separated: the score (the edge width of the sharpest tile,
+// in pixels, blurriest first), the label (or "-"), the verdict at the current
+// threshold, where the sharpest tile was as a percentage across and down the
+// frame, and the file. Photos that cannot be read are listed last.
 func TestFocusReport(t *testing.T) {
 	root := os.Getenv("FOCUS_REPORT_DIR")
 	if root == "" {
@@ -94,10 +95,10 @@ func TestFocusReport(t *testing.T) {
 			scored = append(scored, p)
 		}
 	}
-	sort.SliceStable(scored, func(i, j int) bool { return scored[i].reading.score < scored[j].reading.score })
+	sort.SliceStable(scored, func(i, j int) bool { return scored[i].reading.score > scored[j].reading.score })
 
 	verdict := func(score, threshold float64) string {
-		if score < threshold {
+		if score >= threshold {
 			return "blurry"
 		}
 		return "sharp"
@@ -105,18 +106,19 @@ func TestFocusReport(t *testing.T) {
 	fmt.Printf("\nscore\tlabel\tverdict\tbest tile\tfile\n")
 	for _, p := range scored {
 		r := p.reading
-		fmt.Printf("%.3f\t%s\t%s\t%.0f%%,%.0f%%\t%s\n", r.score, p.label, verdict(r.score, blurThreshold), 100*r.x, 100*r.y, p.file)
+		fmt.Printf("%.2f\t%s\t%s\t%.0f%%,%.0f%%\t%s\n", r.score, p.label, verdict(r.score, blurThreshold), 100*r.x, 100*r.y, p.file)
 	}
 	for _, p := range failed {
 		fmt.Printf("-\t%s\tunreadable\t-\t%s (%v)\n", p.label, p.file, p.err)
 	}
-	fmt.Printf("\n%d photos scored at blurThreshold %.2f, %d unreadable\n", len(scored), blurThreshold, len(failed))
+	fmt.Printf("\n%d photos scored at blurThreshold %g, %d unreadable\n", len(scored), blurThreshold, len(failed))
 	if !labelled {
 		return
 	}
 
 	// What a threshold would get wrong: keepers it marks for deletion, and
-	// misses it lets through. A photo is marked when its score is below it.
+	// misses it lets through. A photo is marked when its score is at or above
+	// it.
 	var sharp, blurry []*photo
 	for _, p := range scored {
 		if p.label == "sharp" {
@@ -127,38 +129,39 @@ func TestFocusReport(t *testing.T) {
 	}
 	mistakes := func(threshold float64) (marked, missed int) {
 		for _, p := range sharp {
-			if p.reading.score < threshold {
+			if p.reading.score >= threshold {
 				marked++
 			}
 		}
 		for _, p := range blurry {
-			if p.reading.score >= threshold {
+			if p.reading.score < threshold {
 				missed++
 			}
 		}
 		return marked, missed
 	}
+	// Both lists run blurriest first.
 	if len(sharp) > 0 {
-		fmt.Printf("sharp:  %d photos, lowest %.3f (%s)\n", len(sharp), sharp[0].reading.score, sharp[0].file)
+		fmt.Printf("sharp:  %d photos, widest %.2f (%s)\n", len(sharp), sharp[0].reading.score, sharp[0].file)
 	}
 	if len(blurry) > 0 {
-		top := blurry[len(blurry)-1]
-		fmt.Printf("blurry: %d photos, highest %.3f (%s)\n", len(blurry), top.reading.score, top.file)
+		low := blurry[len(blurry)-1]
+		fmt.Printf("blurry: %d photos, narrowest %.2f (%s)\n", len(blurry), low.reading.score, low.file)
 	}
 	if len(sharp) > 0 && len(blurry) > 0 {
-		lo, hi := blurry[len(blurry)-1].reading.score, sharp[0].reading.score
+		lo, hi := sharp[0].reading.score, blurry[len(blurry)-1].reading.score
 		if lo < hi {
-			fmt.Printf("separable: any threshold above %.3f and no higher than %.3f marks every blurry photo and no sharp one\n", lo, hi)
+			fmt.Printf("separable: any threshold above %.2f and no higher than %.2f marks every blurry photo and no sharp one\n", lo, hi)
 		} else {
-			fmt.Printf("not separable: the blurriest-scoring sharp photo is at or below the sharpest-scoring blurry one, so a threshold alone has to trade one kind of mistake for the other\n")
+			fmt.Printf("not separable: the blurriest-scoring sharp photo is at or above the sharpest-scoring blurry one, so a threshold alone has to trade one kind of mistake for the other\n")
 		}
 	}
 	marked, missed := mistakes(blurThreshold)
-	fmt.Printf("at the current %.2f: %d of %d sharp photos would be marked for deletion, %d of %d blurry photos would be missed\n",
+	fmt.Printf("at the current %g: %d of %d sharp photos would be marked for deletion, %d of %d blurry photos would be missed\n",
 		blurThreshold, marked, len(sharp), missed, len(blurry))
 	fmt.Printf("\nthreshold\tsharp marked\tblurry missed\n")
-	for i := 4; i <= 30; i++ {
-		threshold := float64(i) / 20
+	for i := 12; i <= 36; i++ {
+		threshold := float64(i) / 4
 		marked, missed := mistakes(threshold)
 		fmt.Printf("%.2f\t%d\t%d\n", threshold, marked, missed)
 	}

@@ -44,7 +44,7 @@ const mockApi = ({ photos = [], saved = [], gallery = null, albums = [], upload 
       return ndjsonResponse([
         { type: 'start', total },
         { type: 'progress', checked: total, total },
-        { type: 'done', checked: total, blurry, failed: [], scores: {}, threshold: 0.6 },
+        { type: 'done', checked: total, blurry, failed: [], scores: {}, threshold: 5.5 },
       ]);
     }
     if (path.includes('/api/directories')) return jsonResponse(sessions);
