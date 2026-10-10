@@ -20,11 +20,33 @@ const fakeMobileViewport = () => {
   });
 };
 
-const mockApi = ({ photos = [], saved = [], gallery = null, albums = [], upload = null, edits = {}, editResult = null, directories = null, sdSpace = null } = {}) => {
+// A streamed (NDJSON) response that hands over one event per read, the way
+// the backend reports an import's or a focus check's progress.
+const ndjsonResponse = (events) => {
+  const lines = events.map(evt => new TextEncoder().encode(`${JSON.stringify(evt)}\n`));
+  return Promise.resolve({
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: () => Promise.resolve(lines.length > 0 ? { done: false, value: lines.shift() } : { done: true }),
+      }),
+    },
+  });
+};
+
+const mockApi = ({ photos = [], saved = [], gallery = null, albums = [], upload = null, edits = {}, editResult = null, directories = null, sdSpace = null, blurry = [] } = {}) => {
   const jsonResponse = (data, ok = true) => Promise.resolve({ ok, json: () => Promise.resolve(data) });
   const sessions = directories || [{ name: 'session-1', photo_count: photos.length, selected_count: saved.length }];
-  global.fetch = jest.fn((url) => {
+  global.fetch = jest.fn((url, options) => {
     const path = String(url);
+    if (path.includes('/api/detect-blur')) {
+      const total = JSON.parse(options.body).files.length;
+      return ndjsonResponse([
+        { type: 'start', total },
+        { type: 'progress', checked: total, total },
+        { type: 'done', checked: total, blurry, failed: [], scores: {}, threshold: 0.6 },
+      ]);
+    }
     if (path.includes('/api/directories')) return jsonResponse(sessions);
     if (path.includes('/api/photos?')) return jsonResponse(photos);
     if (path.includes('/api/selected-photos')) return jsonResponse(saved);
@@ -78,6 +100,7 @@ test('batch actions live on their own row, apart from the review buttons', async
   expect(reviewRow).toContainElement(screen.getByRole('button', { name: /^Next$/i }));
   expect(sessionRow).toContainElement(screen.getByRole('button', { name: /^Save 0 Selections$/i }));
   expect(sessionRow).toContainElement(screen.getByRole('button', { name: /^Export RAW$/i }));
+  expect(sessionRow).toContainElement(screen.getByRole('button', { name: /^Find Blurry$/i }));
   // navigate / review / photo tools / view
   expect(reviewRow.querySelectorAll('.control-group')).toHaveLength(4);
 });
@@ -96,6 +119,66 @@ test('restores unsaved selections and deletion marks from localStorage', async (
   // already-saved.JPG is on disk already, so both are dropped.
   expect(await screen.findByRole('button', { name: /Save 1 Selection/i })).toBeInTheDocument();
   expect(await screen.findByRole('option', { name: /Marked for Deletion \(1\)/i })).toBeInTheDocument();
+});
+
+test('Find Blurry marks what the focus check flags and opens the deletion review, deleting nothing', async () => {
+  mockApi({
+    photos: ['100_IMG_0001.JPG', '100_IMG_0002.JPG', '100_IMG_0003.JPG', '100_IMG_0004.JPG'],
+    saved: ['100_IMG_0003.JPG'],
+    // 0001 comes back blurry too, standing in for a photo the user selected
+    // while the check was still running.
+    blurry: ['100_IMG_0001.JPG', '100_IMG_0002.JPG', '100_IMG_0004.JPG'],
+  });
+  render(<App />);
+  await screen.findByRole('option', { name: /All Images \(4\)/i });
+  fireEvent.keyDown(window, { key: 's' });
+  await screen.findByRole('button', { name: /Save 1 Selection/i });
+
+  fireEvent.click(screen.getByRole('button', { name: /^Find Blurry$/i }));
+
+  // Only photos still awaiting a verdict are sent: not the selected one, not the saved one
+  await waitFor(() => expect(postedTo('/api/detect-blur')).toEqual({
+    directory: 'session-1',
+    files: ['100_IMG_0002.JPG', '100_IMG_0004.JPG'],
+  }));
+  // The carousel switches to the photos marked for deletion...
+  const deletedOption = await screen.findByRole('option', { name: 'Marked for Deletion (2)' });
+  await waitFor(() => expect(deletedOption.selected).toBe(true));
+  // ...where the usual button waits for the user to approve the deletion
+  expect(screen.getByRole('button', { name: 'Delete 2 from Disk' })).toBeInTheDocument();
+  expect(global.fetch.mock.calls.some(([url]) => String(url).includes('/api/delete-photos'))).toBe(false);
+  // A selection always outranks the focus check
+  expect(screen.getByRole('button', { name: /Save 1 Selection/i })).toBeInTheDocument();
+  // The marks are stashed like hand-made ones, so a closed tab keeps them
+  await waitFor(() => expect(JSON.parse(localStorage.getItem('camera-rip.pending.session-1'))).toEqual({
+    selected: ['100_IMG_0001.JPG'],
+    deleted: ['100_IMG_0002.JPG', '100_IMG_0004.JPG'],
+  }));
+  // Done checking, so the button is ready for another pass
+  expect(screen.getByRole('button', { name: /^Find Blurry$/i })).not.toBeDisabled();
+});
+
+test('Find Blurry leaves the view alone when every photo is in focus', async () => {
+  mockApi({ photos: ['100_IMG_0001.JPG', '100_IMG_0002.JPG'], blurry: [] });
+  render(<App />);
+  await screen.findByRole('option', { name: /All Images \(2\)/i });
+
+  fireEvent.click(screen.getByRole('button', { name: /^Find Blurry$/i }));
+
+  expect(await screen.findByText(/No blurry photos among the 2 checked/i)).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: /All Images \(2\)/i }).selected).toBe(true);
+  expect(screen.getByRole('option', { name: 'Marked for Deletion (0)' })).toBeInTheDocument();
+});
+
+test('a film strip longer than the photo list wraps around without a broken thumbnail', async () => {
+  // Two photos is what a focus check that finds two missed shots leaves in
+  // the deletion review.
+  mockApi({ photos: ['100_IMG_0001.JPG', '100_IMG_0002.JPG'] });
+  const { container } = render(<App />);
+  await screen.findByRole('option', { name: /All Images \(2\)/i });
+  const thumbs = Array.from(container.querySelectorAll('.carousel-thumbnail img'));
+  expect(thumbs).toHaveLength(7);
+  thumbs.forEach(img => expect(img.getAttribute('src')).toMatch(/100_IMG_000[12]\.JPG$/));
 });
 
 test('sidebar shows how full a connected SD card is', async () => {

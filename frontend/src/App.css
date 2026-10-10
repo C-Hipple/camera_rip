@@ -755,6 +755,21 @@
   cursor: not-allowed;
 }
 
+/* Find Blurry only marks photos, so it stays a quiet outline; the red belongs
+   to Delete from Disk, which it hands the review to. */
+.controls .find-blurry-button {
+  background-color: transparent;
+  color: #d3869b;
+  /* Gruvbox Bright Purple */
+  border-color: #b16286;
+  /* Gruvbox Purple */
+}
+
+.controls .find-blurry-button:hover:not(:disabled) {
+  background-color: #504945;
+  border-color: #d3869b;
+}
+
 /* Outlined at rest so it reads as dangerous without shouting; it only fills
    red under the cursor, right before the confirmation modal. */
 .controls .delete-photos-button {

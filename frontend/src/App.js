@@ -103,6 +103,34 @@ const prunePendingSelections = (directories) => {
     } catch (e) { /* best-effort */ }
 };
 
+// Long-running backend jobs (an import, a focus check) stream newline-delimited
+// JSON progress events. Hands each event to onEvent as it arrives.
+const readNDJSON = async (response, onEvent) => {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const handleLine = (line) => {
+        if (!line.trim()) return;
+        try {
+            onEvent(JSON.parse(line));
+        } catch (e) {
+            // Ignore malformed lines
+        }
+    };
+    for (; ;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex;
+        while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+            handleLine(buffer.slice(0, newlineIndex));
+            buffer = buffer.slice(newlineIndex + 1);
+        }
+    }
+    // Handle any trailing buffered line without a newline.
+    handleLine(buffer + decoder.decode());
+};
+
 // Sessions read "2025-12-11 Holiday Party (12 / 200)" in the selector: how many
 // of the folder's photos made it into its selected/ folder, so an old import's
 // yield is visible without opening it.
@@ -166,6 +194,24 @@ function App() {
     // Editing rewrites a photo in place, so its URL needs a token the browser
     // has not cached yet. Keyed by filename, bumped on every edit and revert.
     const [photoVersions, setPhotoVersions] = useState({});
+    // Progress of a running focus check, {checked, total}; null when idle.
+    const [blurCheck, setBlurCheck] = useState(null);
+    // Aborts the running focus check, if any.
+    const blurCheckAbortRef = useRef(null);
+    // The review state as of the last render, for the focus check, which
+    // finishes long after the click that started it.
+    const reviewStateRef = useRef({ directory: '', photos: [], selected: new Set(), saved: new Set() });
+
+    useEffect(() => {
+        reviewStateRef.current = { directory: currentDirectory, photos, selected: selectedPhotos, saved: savedPhotos };
+    }, [currentDirectory, photos, selectedPhotos, savedPhotos]);
+
+    // A focus check belongs to the session it was started in, so switching
+    // sessions (or closing the app) stops it rather than letting it mark
+    // photos in the wrong place.
+    useEffect(() => () => {
+        if (blurCheckAbortRef.current) blurCheckAbortRef.current.abort();
+    }, [currentDirectory]);
 
     // A photo rewritten on disk keeps its URL, so bump a token to defeat the
     // browser (and thumbnail) cache for that one file.
@@ -369,13 +415,10 @@ function App() {
             }
 
             // Success streams newline-delimited JSON progress events.
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
             let doneEvent = null;
             let errorEvent = null;
 
-            const handleEvent = (evt) => {
+            await readNDJSON(response, (evt) => {
                 if (evt.type === 'start') {
                     setImportProgress({ copied: 0, total: evt.total });
                     toast.update(toastId, { render: `Importing 0 / ${evt.total}...`, isLoading: true });
@@ -387,31 +430,7 @@ function App() {
                 } else if (evt.type === 'error') {
                     errorEvent = evt;
                 }
-            };
-
-            for (; ;) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                let newlineIndex;
-                while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
-                    const line = buffer.slice(0, newlineIndex).trim();
-                    buffer = buffer.slice(newlineIndex + 1);
-                    if (!line) continue;
-                    try {
-                        handleEvent(JSON.parse(line));
-                    } catch (e) {
-                        // Ignore malformed lines
-                    }
-                }
-            }
-            // Handle any trailing buffered line without a newline.
-            const tail = buffer.trim();
-            if (tail) {
-                try {
-                    handleEvent(JSON.parse(tail));
-                } catch (e) { /* ignore */ }
-            }
+            });
 
             if (errorEvent) {
                 toast.update(toastId, { render: errorEvent.message || 'Import failed.', type: "error", isLoading: false, autoClose: 5000 });
@@ -668,6 +687,84 @@ function App() {
             toast.update(toastId, { render: "Failed to delete photos.", type: "error", isLoading: false, autoClose: 5000 });
         }
         setIsDeletingPhotos(false);
+    };
+
+    // Ask the backend which photos have nothing in focus and mark those for
+    // deletion: the same mark the d key sets, so nothing leaves the disk until
+    // the user has looked through them and pressed Delete from Disk. Only
+    // photos still awaiting a verdict are checked, and the view switches to
+    // the deletion review once the results are in. Review carries on while
+    // it runs, and a photo selected in the meantime is kept.
+    const handleFindBlurry = async () => {
+        const directory = currentDirectory;
+        const candidates = photos.filter(name => !selectedPhotos.has(name) && !savedPhotos.has(name) && !deletedPhotos.has(name));
+        if (candidates.length === 0) {
+            toast.info("Every photo here is already selected, saved or marked for deletion.");
+            return;
+        }
+        const controller = new AbortController();
+        blurCheckAbortRef.current = controller;
+        setBlurCheck({ checked: 0, total: candidates.length });
+        const toastId = toast.loading(`Checking focus 0 / ${candidates.length}...`);
+        try {
+            const response = await fetch(`${API_URL}/api/detect-blur`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ directory, files: candidates }),
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                const text = await response.text();
+                toast.update(toastId, { render: text.trim() || 'Failed to check focus.', type: "error", isLoading: false, autoClose: 5000 });
+                return;
+            }
+
+            let doneEvent = null;
+            await readNDJSON(response, (evt) => {
+                if (evt.type === 'progress') {
+                    setBlurCheck({ checked: evt.checked, total: evt.total });
+                    toast.update(toastId, { render: `Checking focus ${evt.checked} / ${evt.total}...`, isLoading: true });
+                } else if (evt.type === 'done') {
+                    doneEvent = evt;
+                }
+            });
+
+            const live = reviewStateRef.current;
+            if (!doneEvent || live.directory !== directory) {
+                toast.update(toastId, { render: "The focus check stopped before it finished.", type: "error", isLoading: false, autoClose: 5000 });
+                return;
+            }
+            // Skip anything selected, or deleted from disk, while the check ran.
+            const stillHere = new Set(live.photos);
+            const blurry = (doneEvent.blurry || []).filter(name => stillHere.has(name) && !live.selected.has(name) && !live.saved.has(name));
+            const failed = doneEvent.failed || [];
+            const unreadable = failed.length > 0 ? ` ${failed.length} could not be read and ${failed.length === 1 ? 'was' : 'were'} left alone.` : '';
+            if (blurry.length === 0) {
+                toast.update(toastId, { render: `No blurry photos among the ${doneEvent.checked} checked.${unreadable}`, type: "success", isLoading: false, autoClose: 5000 });
+                return;
+            }
+            setDeletedPhotos(prev => {
+                const next = new Set(prev);
+                blurry.forEach(name => next.add(name));
+                return next;
+            });
+            setCarouselFilter('deleted');
+            toast.update(toastId, {
+                render: `Marked ${blurry.length} blurry photo${blurry.length === 1 ? '' : 's'} for deletion. Press d on any worth keeping, then Delete from Disk.${unreadable}`,
+                type: "success", isLoading: false, autoClose: 10000
+            });
+        } catch (err) {
+            if (err.name === 'AbortError') {
+                toast.update(toastId, { render: "Focus check cancelled.", type: "info", isLoading: false, autoClose: 3000 });
+            } else {
+                toast.update(toastId, { render: "Failed to check focus.", type: "error", isLoading: false, autoClose: 5000 });
+            }
+        } finally {
+            if (blurCheckAbortRef.current === controller) {
+                blurCheckAbortRef.current = null;
+                setBlurCheck(null);
+            }
+        }
     };
 
     const handleRenameDirectory = async (newName) => {
@@ -1745,6 +1842,13 @@ function App() {
                             title="Copy the raw file for each selected photo off the card">
                             {isExportingRaw ? 'Exporting…' : `Export RAW${exportStatus.missing_count > 0 ? ` (${exportStatus.missing_count} missing)` : ''}`}
                         </button>
+                        <button
+                            onClick={handleFindBlurry}
+                            disabled={photos.length === 0 || Boolean(blurCheck)}
+                            className="find-blurry-button"
+                            title="Check the focus of every photo not yet selected and mark the blurry ones for deletion. Nothing is deleted until you review them and press Delete from Disk.">
+                            {blurCheck ? `Checking Focus ${blurCheck.checked} / ${blurCheck.total}…` : 'Find Blurry'}
+                        </button>
                         {carouselFilter === 'deleted' && deletedPhotos.size > 0 && (
                             <button
                                 onClick={() => setShowDeletePhotosModal(true)}
@@ -1876,14 +1980,9 @@ function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, sel
 
         const indexes = [];
         for (let i = -3; i <= 3; i++) {
-            let index = currentIndex + i;
-            // Handle wrapping around the array
-            if (index < 0) {
-                index = numPhotos + index;
-            } else if (index >= numPhotos) {
-                index = index % numPhotos;
-            }
-            indexes.push(index);
+            // Wrap around the array, even when it is shorter than the strip
+            // (a deletion review of one or two photos).
+            indexes.push((((currentIndex + i) % numPhotos) + numPhotos) % numPhotos);
         }
         return indexes;
     };
