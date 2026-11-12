@@ -822,6 +822,145 @@ func editsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(edits)
 }
 
+// editFailure is an edit that could not be applied, with the HTTP status that
+// describes why. It lets the HTTP handlers and the MCP tools share one
+// implementation while each reports a failure in its own way.
+type editFailure struct {
+	status  int
+	message string
+}
+
+func (e *editFailure) Error() string { return e.message }
+
+func failEdit(status int, message string) error {
+	return &editFailure{status: status, message: message}
+}
+
+// writeEditFailure replies with err as JSON, using its status when it is an
+// editFailure and a 500 otherwise.
+func writeEditFailure(w http.ResponseWriter, err error) {
+	if f, ok := err.(*editFailure); ok {
+		writeJSONError(w, f.status, f.message)
+		return
+	}
+	writeJSONError(w, http.StatusInternalServerError, err.Error())
+}
+
+// validateEdit checks a photo name and a set of adjustments against what the
+// pipeline accepts, before anything on disk is touched.
+func validateEdit(photo string, edit photoEdit) error {
+	if !validPhotoName(photo) {
+		return failEdit(http.StatusBadRequest, "Invalid photo name")
+	}
+	if !isEditableImage(photo) {
+		return failEdit(http.StatusBadRequest, "Only JPEG and PNG files can be edited")
+	}
+	if edit.Crop != nil && !edit.Crop.valid() {
+		return failEdit(http.StatusBadRequest, "Invalid crop rectangle")
+	}
+	if math.Abs(edit.Exposure) > 5 || math.Abs(edit.Black) > 100 || math.Abs(edit.Highlights) > 100 ||
+		math.Abs(edit.Temperature) > 100 || math.Abs(edit.Tint) > 100 {
+		return failEdit(http.StatusBadRequest, "Adjustment out of range")
+	}
+	if edit.Shadows < 0 || edit.Shadows > 100 ||
+		edit.Sky < 0 || edit.Sky > 100 || edit.Horizon < 0 || edit.Horizon > 100 {
+		return failEdit(http.StatusBadRequest, "Shadow or sky adjustment out of range")
+	}
+	return nil
+}
+
+// readOriginal returns the pristine bytes of a photo: the unedited/ backup if
+// it has been edited, otherwise the photo itself.
+func readOriginal(directory, photo string) ([]byte, error) {
+	if !validPhotoName(photo) {
+		return nil, failEdit(http.StatusBadRequest, "Invalid photo name")
+	}
+	originalPath, err := safePhotoPath(directory, uneditedDirName, photo)
+	if err != nil {
+		return nil, failEdit(http.StatusBadRequest, "Invalid photo path")
+	}
+	if data, err := os.ReadFile(originalPath); err == nil {
+		return data, nil
+	}
+	photoPath, err := safePhotoPath(directory, photo)
+	if err != nil {
+		return nil, failEdit(http.StatusBadRequest, "Invalid photo path")
+	}
+	data, err := os.ReadFile(photoPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, failEdit(http.StatusNotFound, "Photo not found")
+		}
+		return nil, failEdit(http.StatusInternalServerError, "Failed to read the photo")
+	}
+	return data, nil
+}
+
+// applyPhotoEdit renders edit over the pristine original of a photo, backing
+// that original up on its first edit, and records the settings. An edit that
+// changes nothing restores the original instead; reverted reports which
+// happened. The returned edit is the record as stored.
+func applyPhotoEdit(directory, photo string, edit photoEdit) (saved photoEdit, reverted bool, err error) {
+	if err := validateEdit(photo, edit); err != nil {
+		return photoEdit{}, false, err
+	}
+	edit.EditedAt = ""
+	if edit.isIdentity() {
+		// Nothing to apply — restore the original rather than re-encoding it.
+		return photoEdit{}, true, revertPhoto(directory, photo)
+	}
+
+	photoPath, err := safePhotoPath(directory, photo)
+	if err != nil {
+		return photoEdit{}, false, failEdit(http.StatusBadRequest, "Invalid photo path")
+	}
+	originalPath, err := safePhotoPath(directory, uneditedDirName, photo)
+	if err != nil {
+		return photoEdit{}, false, failEdit(http.StatusBadRequest, "Invalid photo path")
+	}
+
+	if _, err := os.Stat(originalPath); os.IsNotExist(err) {
+		if _, err := os.Stat(photoPath); err != nil {
+			return photoEdit{}, false, failEdit(http.StatusNotFound, "Photo not found")
+		}
+		if err := os.MkdirAll(filepath.Dir(originalPath), 0755); err != nil {
+			return photoEdit{}, false, failEdit(http.StatusInternalServerError, "Failed to create backup directory")
+		}
+		if err := copyFile(photoPath, originalPath); err != nil {
+			log.Printf("Failed to back up original %s: %v", photoPath, err)
+			return photoEdit{}, false, failEdit(http.StatusInternalServerError, "Failed to back up the original photo")
+		}
+	}
+
+	original, err := os.ReadFile(originalPath)
+	if err != nil {
+		return photoEdit{}, false, failEdit(http.StatusInternalServerError, "Failed to read the original photo")
+	}
+
+	rendered, err := renderEdit(original, edit)
+	if err != nil {
+		log.Printf("Failed to render edit for %s/%s: %v", directory, photo, err)
+		return photoEdit{}, false, failEdit(http.StatusInternalServerError, "Failed to apply the edit")
+	}
+	if err := writeFileAtomic(photoPath, rendered); err != nil {
+		log.Printf("Failed to write edited photo %s: %v", photoPath, err)
+		return photoEdit{}, false, failEdit(http.StatusInternalServerError, "Failed to save the edited photo")
+	}
+	syncSelectedCopy(directory, photo, rendered)
+	dropThumbnail(directory, photo)
+
+	edit.EditedAt = time.Now().Format(time.RFC3339)
+	editsMu.Lock()
+	edits := readEdits(directory)
+	edits[photo] = edit
+	err = writeEdits(directory, edits)
+	editsMu.Unlock()
+	if err != nil {
+		log.Printf("Failed to record edit for %s/%s: %v", directory, photo, err)
+	}
+	return edit, false, nil
+}
+
 // editPhotoHandler renders an edit over the pristine original, backing that
 // original up on the first edit of a photo.
 func editPhotoHandler(w http.ResponseWriter, r *http.Request) {
@@ -851,30 +990,8 @@ func editPhotoHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "Missing 'directory' or 'photo' in request")
 		return
 	}
-	if !validPhotoName(req.Photo) {
-		writeJSONError(w, http.StatusBadRequest, "Invalid photo name")
-		return
-	}
-	if !isEditableImage(req.Photo) {
-		writeJSONError(w, http.StatusBadRequest, "Only JPEG and PNG files can be edited")
-		return
-	}
-	if req.Crop != nil && !req.Crop.valid() {
-		writeJSONError(w, http.StatusBadRequest, "Invalid crop rectangle")
-		return
-	}
-	if math.Abs(req.Exposure) > 5 || math.Abs(req.Black) > 100 || math.Abs(req.Highlights) > 100 ||
-		math.Abs(req.Temperature) > 100 || math.Abs(req.Tint) > 100 {
-		writeJSONError(w, http.StatusBadRequest, "Adjustment out of range")
-		return
-	}
-	if req.Shadows < 0 || req.Shadows > 100 ||
-		req.Sky < 0 || req.Sky > 100 || req.Horizon < 0 || req.Horizon > 100 {
-		writeJSONError(w, http.StatusBadRequest, "Shadow or sky adjustment out of range")
-		return
-	}
 
-	edit := photoEdit{
+	edit, reverted, err := applyPhotoEdit(req.Directory, req.Photo, photoEdit{
 		Crop:        req.Crop,
 		Temperature: req.Temperature,
 		Tint:        req.Tint,
@@ -884,71 +1001,17 @@ func editPhotoHandler(w http.ResponseWriter, r *http.Request) {
 		Shadows:     req.Shadows,
 		Sky:         req.Sky,
 		Horizon:     req.Horizon,
-	}
-	if edit.isIdentity() {
-		// Nothing to apply — restore the original rather than re-encoding it.
-		restoreOriginal(w, req.Directory, req.Photo)
-		return
-	}
-
-	photoPath, err := safePhotoPath(req.Directory, req.Photo)
+	})
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid photo path")
+		writeEditFailure(w, err)
 		return
-	}
-	originalPath, err := safePhotoPath(req.Directory, uneditedDirName, req.Photo)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid photo path")
-		return
-	}
-
-	if _, err := os.Stat(originalPath); os.IsNotExist(err) {
-		if _, err := os.Stat(photoPath); err != nil {
-			writeJSONError(w, http.StatusNotFound, "Photo not found")
-			return
-		}
-		if err := os.MkdirAll(filepath.Dir(originalPath), 0755); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "Failed to create backup directory")
-			return
-		}
-		if err := copyFile(photoPath, originalPath); err != nil {
-			log.Printf("Failed to back up original %s: %v", photoPath, err)
-			writeJSONError(w, http.StatusInternalServerError, "Failed to back up the original photo")
-			return
-		}
-	}
-
-	original, err := os.ReadFile(originalPath)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "Failed to read the original photo")
-		return
-	}
-
-	rendered, err := renderEdit(original, edit)
-	if err != nil {
-		log.Printf("Failed to render edit for %s/%s: %v", req.Directory, req.Photo, err)
-		writeJSONError(w, http.StatusInternalServerError, "Failed to apply the edit")
-		return
-	}
-	if err := writeFileAtomic(photoPath, rendered); err != nil {
-		log.Printf("Failed to write edited photo %s: %v", photoPath, err)
-		writeJSONError(w, http.StatusInternalServerError, "Failed to save the edited photo")
-		return
-	}
-	syncSelectedCopy(req.Directory, req.Photo, rendered)
-	dropThumbnail(req.Directory, req.Photo)
-
-	edit.EditedAt = time.Now().Format(time.RFC3339)
-	editsMu.Lock()
-	edits := readEdits(req.Directory)
-	edits[req.Photo] = edit
-	err = writeEdits(req.Directory, edits)
-	editsMu.Unlock()
-	if err != nil {
-		log.Printf("Failed to record edit for %s/%s: %v", req.Directory, req.Photo, err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if reverted {
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "reverted", "photo": req.Photo})
+		return
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "edited",
 		"photo":  req.Photo,
@@ -975,25 +1038,27 @@ func revertPhotoHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "Missing 'directory' or 'photo' in request")
 		return
 	}
-	if !validPhotoName(req.Photo) {
-		writeJSONError(w, http.StatusBadRequest, "Invalid photo name")
+	if err := revertPhoto(req.Directory, req.Photo); err != nil {
+		writeEditFailure(w, err)
 		return
 	}
-	restoreOriginal(w, req.Directory, req.Photo)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "reverted", "photo": req.Photo})
 }
 
-// restoreOriginal copies the backup back over the edited photo and clears the
-// edit's traces, replying with the JSON both revert and a no-op edit return.
-func restoreOriginal(w http.ResponseWriter, directory, photo string) {
+// revertPhoto copies the backup back over the edited photo and clears the
+// edit's traces. A photo that was never edited is already its own original.
+func revertPhoto(directory, photo string) error {
+	if !validPhotoName(photo) {
+		return failEdit(http.StatusBadRequest, "Invalid photo name")
+	}
 	photoPath, err := safePhotoPath(directory, photo)
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid photo path")
-		return
+		return failEdit(http.StatusBadRequest, "Invalid photo path")
 	}
 	originalPath, err := safePhotoPath(directory, uneditedDirName, photo)
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid photo path")
-		return
+		return failEdit(http.StatusBadRequest, "Invalid photo path")
 	}
 
 	original, err := os.ReadFile(originalPath)
@@ -1001,23 +1066,17 @@ func restoreOriginal(w http.ResponseWriter, directory, photo string) {
 		if os.IsNotExist(err) {
 			// Never edited: the photo on disk already is the original.
 			removeEditArtifacts(directory, photo)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{"status": "reverted", "photo": photo})
-			return
+			return nil
 		}
-		writeJSONError(w, http.StatusInternalServerError, "Failed to read the original photo")
-		return
+		return failEdit(http.StatusInternalServerError, "Failed to read the original photo")
 	}
 
 	if err := writeFileAtomic(photoPath, original); err != nil {
 		log.Printf("Failed to restore original %s: %v", photoPath, err)
-		writeJSONError(w, http.StatusInternalServerError, "Failed to restore the original photo")
-		return
+		return failEdit(http.StatusInternalServerError, "Failed to restore the original photo")
 	}
 	syncSelectedCopy(directory, photo, original)
 	dropThumbnail(directory, photo)
 	removeEditArtifacts(directory, photo)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"status": "reverted", "photo": photo})
+	return nil
 }

@@ -14,6 +14,7 @@ A web-based application for importing photos from your camera's SD card, reviewi
 - **Raw File Export**: Copy corresponding raw files (Canon CR3, Olympus ORF) directly from SD card for selected photos
 - **Export Status Tracking**: Track how many raw files have been exported vs. how many are missing
 - **Upload to a Gallery**: Post a selected photo straight to a photo gallery with a title, hashtags and an album
+- **Agent Editing (MCP)**: Let a local AI agent (Claude Code, Claude Desktop, Cursor, …) look at a photo, measure its clipping and dial in the same edits the editor offers — e.g. "bring the sky back on 100_IMG_0042.JPG without darkening the bird"
 
 ## Screenshot
 
@@ -198,6 +199,47 @@ The album dropdown is filled from `<GALLERY_BASE_URL>/api/albums`, read fresh
 each time the modal opens so an album created in the gallery mid-session is not
 invisible here. A gallery with no albums — or one that cannot be reached — simply
 leaves the dropdown out; the upload works the same without one.
+
+### 6. Let an Agent Edit (MCP)
+
+The server speaks the [Model Context Protocol](https://modelcontextprotocol.io)
+at `http://localhost:5001/mcp`, so a local agent can drive the editor. With the
+app running:
+
+```bash
+claude mcp add --transport http camera-rip http://localhost:5001/mcp
+```
+
+Then ask, for example: *"In the latest session, fix the blown-out sky on
+100_IMG_0042.JPG but keep the heron bright."*
+
+For clients that launch servers as a subprocess instead (Claude Desktop, etc.),
+run the binary with `-mcp` — no web server is started and it speaks MCP on
+stdin/stdout:
+
+```json
+{ "mcpServers": { "camera-rip": { "command": "/path/to/camera-rip", "args": ["-mcp"] } } }
+```
+
+| Tool | What it does |
+| --- | --- |
+| `list_sessions` | Sessions, newest first, with photo and selected counts |
+| `list_photos` | Photos in a session, whether each is selected/editable, and its current edit |
+| `analyze_photo` | A downscaled view plus tone statistics — percentiles, % clipped / crushed, mean colour, histogram — for the frame and its top, middle and bottom thirds |
+| `preview_edit` | Renders proposed settings from the original and returns the image with before/after statistics. Writes nothing |
+| `apply_edit` | Saves the edit exactly as the web editor would (original kept in `unedited/`, `selected/` copy refreshed) |
+| `revert_edit` | Restores the original |
+
+The settings are the editor's own: `exposure`, `highlights`, `shadows`, `sky`,
+`horizon`, `black`, `temperature`, `tint` and `crop`. The server hands the agent
+a short recipe for a clipped sky (highlights first, then the sky pull, then a
+shadow lift for the subject) and the numbers to check it against. Highlights
+already at 255 in the camera JPEG have no detail left; the agent can roll them
+off to a smooth tone, but not invent texture.
+
+The HTTP endpoint only accepts connections from the same machine, even though
+the web UI is reachable from your LAN. Reload the photo in the browser to see an
+edit an agent saved.
 
 ## Keyboard Shortcuts
 

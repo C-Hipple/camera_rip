@@ -402,6 +402,7 @@ func printConnectionInfo(host, port string) {
 	fmt.Println(" Camera Rip is running")
 	fmt.Println("========================================")
 	fmt.Printf("  On this machine:  http://localhost:%s\n", port)
+	fmt.Println(mcpUsage(port))
 
 	// A specific bind address is only reachable at that address
 	if host != "" && host != "0.0.0.0" && host != "::" {
@@ -443,6 +444,7 @@ func main() {
 	devMode := flag.Bool("dev", false, "Run in development mode (do not serve static files)")
 	host := flag.String("host", "0.0.0.0", "Address to listen on (0.0.0.0 = every interface, so other devices on the network can connect)")
 	port := flag.String("port", "5001", "Port to listen on")
+	mcpStdio := flag.Bool("mcp", false, "Serve the photo editor to an agent over MCP on stdin/stdout instead of starting the web server")
 	flag.Parse()
 
 	userHomeDir, err := os.UserHomeDir()
@@ -459,8 +461,15 @@ func main() {
 		log.Fatalf("Failed to create thumbnail cache directory: %v", err)
 	}
 
+	if *mcpStdio {
+		runMCPStdio()
+		return
+	}
+
 	loadGalleryConfig()
 
+	// No CORS wrapper: the agent endpoint is for local MCP clients, not pages.
+	http.HandleFunc("/mcp", mcpHTTPHandler)
 	http.HandleFunc("/api/directories", corsHandler(listDirectoriesHandler))
 	http.HandleFunc("/api/photos", corsHandler(getPhotosHandler))
 	http.HandleFunc("/api/save", corsHandler(saveSelectedPhotosHandler))
