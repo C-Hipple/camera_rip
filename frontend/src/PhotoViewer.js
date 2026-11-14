@@ -199,6 +199,27 @@ function PhotoViewer({ photoName, directory, isSelected, isSaved, isDeleted, sub
         : `${encodeURIComponent(directory)}/${encodeURIComponent(photoName)}`;
     const src = `${API_URL}/photos/${path}${version ? `?v=${version}` : ''}`;
 
+    const statusClass = isSaved ? 'saved' : (isDeleted ? 'deleted' : (isSelected ? 'selected' : ''));
+
+    // Videos play with the browser's own controls; zoom and pan only make
+    // sense for stills. key restarts playback when the clip changes.
+    if (/\.mp4$/i.test(photoName)) {
+        return (
+            <div className="photo-container">
+                <div className="photo-wrapper">
+                    <video
+                        key={src}
+                        src={src}
+                        controls
+                        preload="metadata"
+                        className={`photo-display ${statusClass}`}
+                    />
+                </div>
+                {children && <div className="photo-info">{children}</div>}
+            </div>
+        );
+    }
+
     return (
         <div className="photo-container" ref={containerRef}>
             <div className="photo-wrapper" ref={wrapperRef}>
