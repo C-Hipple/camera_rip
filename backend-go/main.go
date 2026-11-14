@@ -66,6 +66,11 @@ func detectCameraBrand(folderName string) *cameraBrand {
 	return nil
 }
 
+// isVideoFile reports whether name is a video clip the viewer can play.
+func isVideoFile(name string) bool {
+	return strings.HasSuffix(strings.ToLower(name), ".mp4")
+}
+
 func isRawFile(name string) bool {
 	lower := strings.ToLower(name)
 	for _, b := range supportedBrands {
@@ -646,7 +651,7 @@ func listPhotoFiles(dir string) ([]string, error) {
 	for _, entry := range entries {
 		if !entry.IsDir() && !strings.HasPrefix(entry.Name(), "._") {
 			lowerName := strings.ToLower(entry.Name())
-			if strings.HasSuffix(lowerName, ".png") || strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") || strings.HasSuffix(lowerName, ".gif") {
+			if strings.HasSuffix(lowerName, ".png") || strings.HasSuffix(lowerName, ".jpg") || strings.HasSuffix(lowerName, ".jpeg") || strings.HasSuffix(lowerName, ".gif") || strings.HasSuffix(lowerName, ".mp4") {
 				photos = append(photos, entry.Name())
 			} else if isRawFile(entry.Name()) {
 				rawFiles = append(rawFiles, entry.Name())
@@ -2458,6 +2463,9 @@ func findUSBMountPoint() string {
 var thumbnailLocks sync.Map
 
 func generateThumbnail(directory, filename string) error {
+	if isVideoFile(filename) {
+		return fmt.Errorf("no thumbnail for video clips")
+	}
 	thumbnailDir := filepath.Join(thumbnailCacheDir, directory)
 	thumbnailPath := filepath.Join(thumbnailDir, filename)
 
@@ -2512,6 +2520,9 @@ func preGenerateThumbnails(directory string, photos []string) {
 		go func() {
 			defer wg.Done()
 			for filename := range photoChan {
+				if isVideoFile(filename) {
+					continue
+				}
 				if err := generateThumbnail(directory, filename); err != nil {
 					log.Printf("Failed to generate thumbnail for %s: %v", filename, err)
 				}

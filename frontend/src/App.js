@@ -24,6 +24,8 @@ const formatBytes = (bytes) => {
 
 // Mirrors the backend's editable-format check: RAW files only carry an
 // embedded preview, so there is nothing meaningful to crop or expose.
+const isVideo = (filename) => /\.mp4$/i.test(filename || '');
+
 const isEditableImage = (filename) => /\.(jpe?g|png)$/i.test(filename || '');
 
 // Matches the backend's default new-import folder name (2006-01-02_15-04-05).
@@ -697,7 +699,7 @@ function App() {
     // it runs, and a photo selected in the meantime is kept.
     const handleFindBlurry = async () => {
         const directory = currentDirectory;
-        const candidates = photos.filter(name => !selectedPhotos.has(name) && !savedPhotos.has(name) && !deletedPhotos.has(name));
+        const candidates = photos.filter(name => !isVideo(name) && !selectedPhotos.has(name) && !savedPhotos.has(name) && !deletedPhotos.has(name));
         if (candidates.length === 0) {
             toast.info("Every photo here is already selected, saved or marked for deletion.");
             return;
@@ -2004,10 +2006,14 @@ function Carousel({ photos, currentIndex, setCurrentIndex, currentDirectory, sel
                         onClick={() => setCurrentIndex(photoIndex)}
                         title={isEdited ? `${photoName} (edited)` : photoName}
                     >
-                        <img
-                            src={thumbnailUrl(currentDirectory, photoName, photoVersions[photoName])}
-                            alt={`thumbnail-${photoName}`}
-                        />
+                        {isVideo(photoName) ? (
+                            <div className="video-thumbnail" aria-label={`video-${photoName}`}>▶</div>
+                        ) : (
+                            <img
+                                src={thumbnailUrl(currentDirectory, photoName, photoVersions[photoName])}
+                                alt={`thumbnail-${photoName}`}
+                            />
+                        )}
                         {isEdited && <span className="thumbnail-edited-badge" title="Edited">✎</span>}
                     </div>
                 );
@@ -2031,11 +2037,15 @@ function ThumbnailGrid({ photos, currentIndex, setCurrentIndex, currentDirectory
                         onClick={() => setCurrentIndex(index)}
                         title={isEdited ? `${photoName} (edited)` : photoName}
                     >
-                        <img
-                            src={thumbnailUrl(currentDirectory, photoName, photoVersions[photoName])}
-                            alt={photoName}
-                            loading="lazy"
-                        />
+                        {isVideo(photoName) ? (
+                            <div className="video-thumbnail" aria-label={`video-${photoName}`}>▶</div>
+                        ) : (
+                            <img
+                                src={thumbnailUrl(currentDirectory, photoName, photoVersions[photoName])}
+                                alt={photoName}
+                                loading="lazy"
+                            />
+                        )}
                         {isEdited && <span className="thumbnail-edited-badge" title="Edited">✎</span>}
                         <div className="thumbnail-grid-label">{photoName}</div>
                     </div>
